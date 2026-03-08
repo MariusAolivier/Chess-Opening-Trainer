@@ -7,11 +7,28 @@ export interface MoveNode {
   fen: string
   comment?: string
   children: MoveNode[]
+  /** Only set on variation roots (non-mainline children). true = own session, false = inline detour */
+  independent?: boolean
 }
+
+/** Depth of the mainline of a node list (following children[0] at each step) */
+function lineDepth(nodes: MoveNode[]): number {
+  let depth = 0
+  let current = nodes
+  while (current.length > 0) {
+    depth++
+    current = current[0].children
+  }
+  return depth
+}
+
+/** Variations longer than this many moves get their own session; shorter ones are inlined */
+const INLINE_MAX_DEPTH = 4
 
 export interface Chapter {
   title: string
   startFen: string
+  startComment?: string
   moves: MoveNode[]  // children of the start position
 }
 
@@ -37,7 +54,7 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
   const mainNode: MoveNode = {
     san: move.notation.notation,
     fen,
-    comment: move.commentAfter,
+    comment: [move.commentMove, move.commentAfter].filter(Boolean).join(' ') || undefined,
     children: buildLine(fen, rest, chess),
   }
 
@@ -49,11 +66,14 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
     const varResult = chess.move(varFirst.notation.notation)
     if (!varResult) return []
     const varFen = chess.fen()
+    const altChildren = buildLine(varFen, varRest, chess)
+    const depth = 1 + lineDepth(altChildren)
     return [{
       san: varFirst.notation.notation,
       fen: varFen,
-      comment: varFirst.commentAfter,
-      children: buildLine(varFen, varRest, chess),
+      comment: [varFirst.commentMove, varFirst.commentAfter].filter(Boolean).join(' ') || undefined,
+      children: altChildren,
+      independent: depth > INLINE_MAX_DEPTH,
     } satisfies MoveNode]
   })
 
@@ -78,6 +98,7 @@ export function parseStudy(pgn: string): Chapter[] {
     return {
       title,
       startFen,
+      startComment: game.gameComment?.comment,
       moves: buildLine(startFen, game.moves as PgnMove[], chess),
     }
   })

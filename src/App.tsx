@@ -11,17 +11,42 @@ function App() {
   const [moveIndex, setMoveIndex] = useState(-1)
   const [error, setError] = useState<string | null>(null)
 
-  // Flat mainline: [{fen, san}] following the first child at each node
+  const [showBranches, setShowBranches] = useState(false)
+
+  // Flat mainline: [{fen, san, comment, alternatives}] following the first child at each node.
+  // alternatives = sibling nodes that could have been played instead of this move.
   const mainline = useMemo(() => {
     if (!selectedChapter) return []
-    const line: { fen: string; san: string }[] = []
+    const line: { fen: string; san: string; comment?: string; alternatives: MoveNode[] }[] = []
     let nodes: MoveNode[] = selectedChapter.moves
     while (nodes.length > 0) {
       const node = nodes[0]
-      line.push({ fen: node.fen, san: node.san })
+      line.push({ fen: node.fen, san: node.san, comment: node.comment, alternatives: nodes.slice(1) })
       nodes = node.children
     }
     return line
+  }, [selectedChapter])
+
+  // Collect all fork points in the entire tree for the classification panel
+  const branchForks = useMemo(() => {
+    if (!selectedChapter) return []
+    const forks: { moveNumber: number; side: 'w' | 'b'; mainSan: string; alts: MoveNode[] }[] = []
+    function walk(nodes: MoveNode[], plyFromStart: number) {
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i]
+        if (i === 0 && nodes.length > 1) {
+          // This is a mainline node with alternatives
+          const moveNum = Math.ceil(plyFromStart / 2)
+          const side = plyFromStart % 2 === 1 ? 'w' : 'b'
+          forks.push({ moveNumber: moveNum, side, mainSan: node.san, alts: nodes.slice(1) })
+        }
+        walk(node.children, plyFromStart + 1)
+      }
+    }
+    // plyFromStart starts at 1 for the first move
+    const startColor = selectedChapter.startFen.split(' ')[1] as 'w' | 'b'
+    walk(selectedChapter.moves, startColor === 'w' ? 1 : 2)
+    return forks
   }, [selectedChapter])
 
   // Reset position when chapter changes
@@ -140,12 +165,76 @@ function App() {
               ? 'Start position'
               : `${Math.ceil((moveIndex + 1) / 2)}${mainline[moveIndex] ? (moveIndex % 2 === 0 ? '.' : '...') : ''} ${mainline[moveIndex]?.san ?? ''}`
             }
+            {moveIndex >= 0 && (() => {
+              const alts = mainline[moveIndex]?.alternatives ?? []
+              const inlineCount = alts.filter(a => !a.independent).length
+              const indepCount = alts.filter(a => a.independent).length
+              if (!inlineCount && !indepCount) return null
+              return (
+                <span style={{ marginLeft: '6px', fontSize: '0.75rem' }}>
+                  {inlineCount > 0 && (
+                    <span title={`${inlineCount} inline sideline(s)`} style={{ color: '#f0c040' }}>{'●'.repeat(inlineCount)}</span>
+                  )}
+                  {indepCount > 0 && (
+                    <span title={`${indepCount} independent variation(s)`} style={{ color: '#60adf0', marginLeft: inlineCount > 0 ? '3px' : undefined }}>{'●'.repeat(indepCount)}</span>
+                  )}
+                </span>
+              )
+            })()}
             <span style={{ marginLeft: '8px', color: '#aaa' }}>
               ({moveIndex + 1} / {mainline.length})
             </span>
           </div>
         )}
         <Chessboard fen={currentFen} readonly={!!selectedChapter} />
+        {selectedChapter && (() => {
+          const comment = moveIndex === -1
+            ? selectedChapter.startComment
+            : mainline[moveIndex]?.comment
+          return comment ? (
+            <div style={{
+              maxWidth: '400px', padding: '8px 12px', borderRadius: '6px',
+              background: '#f0ede4', color: '#444', fontSize: '0.875rem',
+              fontStyle: 'italic', lineHeight: '1.5',
+            }}>
+              {comment}
+            </div>
+          ) : null
+        })()
+        }
+        {selectedChapter && branchForks.length > 0 && (
+          <div style={{ maxWidth: '400px', width: '100%' }}>
+            <button
+              onClick={() => setShowBranches(v => !v)}
+              style={{ fontSize: '0.8rem', padding: '4px 10px', cursor: 'pointer', width: '100%', background: '#2b2b2b', color: '#ccc', border: '1px solid #444', borderRadius: '4px' }}
+            >
+              {showBranches ? '▲' : '▼'} Branch classification ({branchForks.length} fork{branchForks.length !== 1 ? 's' : ''})
+            </button>
+            {showBranches && (
+              <div style={{ background: '#1e1e1e', border: '1px solid #444', borderTop: 'none', borderRadius: '0 0 4px 4px', padding: '8px', fontSize: '0.8rem', color: '#ccc' }}>
+                {branchForks.map((fork, fi) => (
+                  <div key={fi} style={{ marginBottom: '8px', paddingBottom: '8px', borderBottom: fi < branchForks.length - 1 ? '1px solid #333' : 'none' }}>
+                    <span style={{ color: '#888' }}>
+                      {fork.moveNumber}{fork.side === 'w' ? '.' : '...'}
+                    </span>
+                    {' '}
+                    <strong style={{ color: '#fff' }}>{fork.mainSan}</strong>
+                    <span style={{ color: '#888' }}> (mainline)</span>
+                    {fork.alts.map((alt, ai) => (
+                      <div key={ai} style={{ marginTop: '3px', paddingLeft: '12px' }}>
+                        <span style={{ color: alt.independent ? '#60adf0' : '#f0c040' }}>●</span>
+                        {' '}
+                        <strong>{alt.san}</strong>
+                        {' '}
+                        <span style={{ color: '#888' }}>({alt.independent ? 'independent' : 'inline'})</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
