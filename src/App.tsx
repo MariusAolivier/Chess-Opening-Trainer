@@ -4,6 +4,24 @@ import { parseStudy, type Chapter, type MoveNode } from './lib/pgn'
 import { loadStudies, saveStudy, deleteStudy, type StoredStudy } from './lib/storage'
 import { Chess } from 'chess.js'
 
+type InlineDetour = {
+  forkFen: string
+  forkMainlineIndex: number
+  pendingInlines: MoveNode[]
+  detourLine: Array<{ fen: string; san: string; comment?: string }>
+  detourIndex: number  // -1 = at fork position before any detour move is played
+}
+
+function flattenDetour(root: MoveNode): Array<{ fen: string; san: string; comment?: string }> {
+  const line: Array<{ fen: string; san: string; comment?: string }> = []
+  let node: MoveNode | undefined = root
+  while (node) {
+    line.push({ fen: node.fen, san: node.san, comment: node.comment })
+    node = node.children[0]
+  }
+  return line
+}
+
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [storedStudies, setStoredStudies] = useState<StoredStudy[]>(() => loadStudies())
@@ -14,6 +32,9 @@ function App() {
   const [quizMode, setQuizMode] = useState(false)
   const [quizDone, setQuizDone] = useState(false)
   const [quizWrong, setQuizWrong] = useState<string | null>(null)
+  const [inlineDetour, setInlineDetour] = useState<InlineDetour | null>(null)
+  const [boardResetKey, setBoardResetKey] = useState(0)
+  const visitedDetourForksRef = useRef<Set<number>>(new Set())
   const [uploadColor, setUploadColor] = useState<'white' | 'black'>('white')
   const [activePlayerColor, setActivePlayerColor] = useState<'white' | 'black'>('white')
 
@@ -65,6 +86,8 @@ function App() {
     setQuizMode(false)
     setQuizDone(false)
     setQuizWrong(null)
+    setInlineDetour(null)
+    visitedDetourForksRef.current = new Set()
   }, [selectedChapter])
 
   // Keyboard navigation (disabled in quiz mode)
@@ -83,23 +106,82 @@ function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [mainline, quizMode])
 
-  // Auto-play opponent moves in quiz mode
+  // Auto-play opponent moves in quiz mode, with inline detour navigation
   useEffect(() => {
     if (!quizMode || !selectedChapter || quizDone) return
+
+    if (inlineDetour) {
+      const { detourLine, detourIndex, forkFen, pendingInlines, forkMainlineIndex } = inlineDetour
+      const detourFen = detourIndex === -1 ? forkFen : detourLine[detourIndex]?.fen
+      if (!detourFen) return
+      const nextDetourIndex = detourIndex + 1
+
+      if (nextDetourIndex >= detourLine.length) {
+        // End of this detour – pause, then move to next pending inline or return to mainline
+        const t = setTimeout(() => {
+          setQuizWrong(null)
+          setBoardResetKey(k => k + 1) // clear last-move highlight when snapping back
+          if (pendingInlines.length > 0) {
+            setInlineDetour({
+              forkFen,
+              forkMainlineIndex,
+              pendingInlines: pendingInlines.slice(1),
+              detourLine: flattenDetour(pendingInlines[0]),
+              detourIndex: -1,
+            })
+          } else {
+            visitedDetourForksRef.current.add(forkMainlineIndex)
+            setInlineDetour(null)
+          }
+        }, 700)
+        return () => clearTimeout(t)
+      }
+
+      const colorToMove = detourFen.split(' ')[1] as 'w' | 'b'
+      if (colorToMove !== userColor) {
+        // Auto-play opponent's detour move
+        const t = setTimeout(() => {
+          setInlineDetour(d => d ? { ...d, detourIndex: nextDetourIndex } : null)
+          setQuizWrong(null)
+        }, 700)
+        return () => clearTimeout(t)
+      }
+      return // user's turn in the detour
+    }
+
+    // Normal mainline logic
     const fen = moveIndex === -1 ? selectedChapter.startFen : mainline[moveIndex]?.fen
     if (!fen) return
-    const colorToMove = fen.split(' ')[1] as 'w' | 'b'
     const nextIndex = moveIndex + 1
     if (nextIndex >= mainline.length) { setQuizDone(true); return }
+
+    // Before playing mainline[nextIndex], check for unvisited inline detours at this fork
+    if (!visitedDetourForksRef.current.has(nextIndex)) {
+      const inlineAlts = mainline[nextIndex].alternatives.filter(a => !a.independent)
+      if (inlineAlts.length > 0) {
+        setInlineDetour({
+          forkFen: fen,
+          forkMainlineIndex: nextIndex,
+          pendingInlines: inlineAlts.slice(1),
+          detourLine: flattenDetour(inlineAlts[0]),
+          detourIndex: -1,
+        })
+        return
+      }
+    }
+
+    const colorToMove = fen.split(' ')[1] as 'w' | 'b'
     if (colorToMove !== userColor) {
       const t = setTimeout(() => { setMoveIndex(nextIndex); setQuizWrong(null) }, 700)
       return () => clearTimeout(t)
     }
-  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone])
+  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour])
 
-  const currentFen = moveIndex === -1
-    ? selectedChapter?.startFen
-    : mainline[moveIndex]?.fen
+  const currentFen = inlineDetour
+    ? (inlineDetour.detourIndex === -1
+      ? inlineDetour.forkFen
+      : inlineDetour.detourLine[inlineDetour.detourIndex]?.fen)
+    : (moveIndex === -1 ? selectedChapter?.startFen : mainline[moveIndex]?.fen)
 
   function loadChapters(ch: Chapter[], playerColor: 'white' | 'black' = 'white') {
     setChapters(ch)
@@ -138,16 +220,40 @@ function App() {
     setQuizDone(false)
     setQuizWrong(null)
     setMoveIndex(-1)
+    setInlineDetour(null)
+    visitedDetourForksRef.current = new Set()
   }
 
   function stopQuiz() {
     setQuizMode(false)
     setQuizWrong(null)
     setQuizDone(false)
+    setInlineDetour(null)
+    visitedDetourForksRef.current = new Set()
   }
 
   function handleQuizMove(from: string, to: string): boolean {
     if (!quizMode || !selectedChapter || quizDone) return false
+
+    if (inlineDetour) {
+      const { detourLine, detourIndex, forkFen } = inlineDetour
+      const fen = detourIndex === -1 ? forkFen : detourLine[detourIndex]?.fen
+      if (!fen) return false
+      const nextDetourIndex = detourIndex + 1
+      if (nextDetourIndex >= detourLine.length) return false
+      const expected = detourLine[nextDetourIndex]
+      const chess = new Chess(fen)
+      const result = chess.move({ from, to, promotion: 'q' })
+      if (!result) return false
+      if (chess.fen() === expected.fen) {
+        setQuizWrong(null)
+        setInlineDetour(d => d ? { ...d, detourIndex: nextDetourIndex } : null)
+        return true
+      }
+      setQuizWrong(expected.san)
+      return false
+    }
+
     const fen = moveIndex === -1 ? selectedChapter.startFen : mainline[moveIndex]?.fen
     if (!fen) return false
     const nextIndex = moveIndex + 1
@@ -159,10 +265,9 @@ function App() {
       setQuizWrong(null)
       setMoveIndex(nextIndex)
       return true
-    } else {
-      setQuizWrong(mainline[nextIndex].san)
-      return false
     }
+    setQuizWrong(mainline[nextIndex].san)
+    return false
   }
 
   return (
@@ -246,29 +351,42 @@ function App() {
         )}
         {selectedChapter && (
           <div style={{ fontSize: '0.9rem', color: '#555', minHeight: '1.2em' }}>
-            {moveIndex === -1
-              ? 'Start position'
-              : `${Math.ceil((moveIndex + 1) / 2)}${mainline[moveIndex] ? (moveIndex % 2 === 0 ? '.' : '...') : ''} ${mainline[moveIndex]?.san ?? ''}`
+            {inlineDetour
+              ? <>
+                  <span style={{ color: '#f0c040' }}>↪ Sideline</span>
+                  {inlineDetour.detourIndex >= 0 && (
+                    <span style={{ marginLeft: '6px' }}>{inlineDetour.detourLine[inlineDetour.detourIndex]?.san}</span>
+                  )}
+                  <span style={{ marginLeft: '8px', color: '#aaa' }}>
+                    ({Math.max(0, inlineDetour.detourIndex + 1)}/{inlineDetour.detourLine.length})
+                  </span>
+                </>
+              : <>
+                  {moveIndex === -1
+                    ? 'Start position'
+                    : `${Math.ceil((moveIndex + 1) / 2)}${mainline[moveIndex] ? (moveIndex % 2 === 0 ? '.' : '...') : ''} ${mainline[moveIndex]?.san ?? ''}`
+                  }
+                  {moveIndex >= 0 && (() => {
+                    const alts = mainline[moveIndex]?.alternatives ?? []
+                    const inlineCount = alts.filter(a => !a.independent).length
+                    const indepCount = alts.filter(a => a.independent).length
+                    if (!inlineCount && !indepCount) return null
+                    return (
+                      <span style={{ marginLeft: '6px', fontSize: '0.75rem' }}>
+                        {inlineCount > 0 && (
+                          <span title={`${inlineCount} inline sideline(s)`} style={{ color: '#f0c040' }}>{'●'.repeat(inlineCount)}</span>
+                        )}
+                        {indepCount > 0 && (
+                          <span title={`${indepCount} independent variation(s)`} style={{ color: '#60adf0', marginLeft: inlineCount > 0 ? '3px' : undefined }}>{'●'.repeat(indepCount)}</span>
+                        )}
+                      </span>
+                    )
+                  })()}
+                  <span style={{ marginLeft: '8px', color: '#aaa' }}>
+                    ({moveIndex + 1} / {mainline.length})
+                  </span>
+                </>
             }
-            {moveIndex >= 0 && (() => {
-              const alts = mainline[moveIndex]?.alternatives ?? []
-              const inlineCount = alts.filter(a => !a.independent).length
-              const indepCount = alts.filter(a => a.independent).length
-              if (!inlineCount && !indepCount) return null
-              return (
-                <span style={{ marginLeft: '6px', fontSize: '0.75rem' }}>
-                  {inlineCount > 0 && (
-                    <span title={`${inlineCount} inline sideline(s)`} style={{ color: '#f0c040' }}>{'●'.repeat(inlineCount)}</span>
-                  )}
-                  {indepCount > 0 && (
-                    <span title={`${indepCount} independent variation(s)`} style={{ color: '#60adf0', marginLeft: inlineCount > 0 ? '3px' : undefined }}>{'●'.repeat(indepCount)}</span>
-                  )}
-                </span>
-              )
-            })()}
-            <span style={{ marginLeft: '8px', color: '#aaa' }}>
-              ({moveIndex + 1} / {mainline.length})
-            </span>
           </div>
         )}
         <Chessboard
@@ -277,15 +395,18 @@ function App() {
           playerColor={quizMode ? activePlayerColor : undefined}
           orientation={activePlayerColor}
           onMove={quizMode ? handleQuizMove : undefined}
+          resetKey={boardResetKey}
         />
         <div style={{ maxWidth: '400px', width: '100%', padding: '8px 12px', borderRadius: '6px', textAlign: 'center', fontSize: '0.9rem', minHeight: '36px' }}>
           {quizMode && quizDone && <span style={{ color: '#5c5', fontWeight: 'bold' }}>✓ Line complete!</span>}
           {quizMode && quizWrong && <span style={{ color: '#e55' }}>✗ Wrong — expected <strong>{quizWrong}</strong></span>}
         </div>
         {selectedChapter && (() => {
-          const comment = moveIndex === -1
-            ? selectedChapter.startComment
-            : mainline[moveIndex]?.comment
+          const comment = inlineDetour && inlineDetour.detourIndex >= 0
+            ? inlineDetour.detourLine[inlineDetour.detourIndex]?.comment
+            : moveIndex === -1
+              ? selectedChapter.startComment
+              : mainline[moveIndex]?.comment
           return comment ? (
             <div style={{
               maxWidth: '400px', padding: '8px 12px', borderRadius: '6px',
