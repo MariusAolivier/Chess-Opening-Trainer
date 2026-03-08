@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo } from 'react'
 import Chessboard from './components/Chessboard'
 import { parseStudy, type Chapter, type MoveNode } from './lib/pgn'
 import { loadStudies, saveStudy, deleteStudy, type StoredStudy } from './lib/storage'
+import { Chess } from 'chess.js'
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -10,6 +11,11 @@ function App() {
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null)
   const [moveIndex, setMoveIndex] = useState(-1)
   const [error, setError] = useState<string | null>(null)
+  const [quizMode, setQuizMode] = useState(false)
+  const [quizDone, setQuizDone] = useState(false)
+  const [quizWrong, setQuizWrong] = useState<string | null>(null)
+  const [uploadColor, setUploadColor] = useState<'white' | 'black'>('white')
+  const [activePlayerColor, setActivePlayerColor] = useState<'white' | 'black'>('white')
 
   const [showBranches, setShowBranches] = useState(false)
 
@@ -49,12 +55,22 @@ function App() {
     return forks
   }, [selectedChapter])
 
-  // Reset position when chapter changes
-  useEffect(() => { setMoveIndex(-1) }, [selectedChapter])
+  const userColor = useMemo(() =>
+    activePlayerColor === 'white' ? 'w' : 'b'
+  , [activePlayerColor])
 
-  // Keyboard navigation
+  // Reset position and quiz when chapter changes
+  useEffect(() => {
+    setMoveIndex(-1)
+    setQuizMode(false)
+    setQuizDone(false)
+    setQuizWrong(null)
+  }, [selectedChapter])
+
+  // Keyboard navigation (disabled in quiz mode)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (quizMode) return
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'SELECT' || tag === 'INPUT') return
       if (e.key === 'ArrowRight') {
@@ -65,15 +81,30 @@ function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [mainline])
+  }, [mainline, quizMode])
+
+  // Auto-play opponent moves in quiz mode
+  useEffect(() => {
+    if (!quizMode || !selectedChapter || quizDone) return
+    const fen = moveIndex === -1 ? selectedChapter.startFen : mainline[moveIndex]?.fen
+    if (!fen) return
+    const colorToMove = fen.split(' ')[1] as 'w' | 'b'
+    const nextIndex = moveIndex + 1
+    if (nextIndex >= mainline.length) { setQuizDone(true); return }
+    if (colorToMove !== userColor) {
+      const t = setTimeout(() => { setMoveIndex(nextIndex); setQuizWrong(null) }, 700)
+      return () => clearTimeout(t)
+    }
+  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone])
 
   const currentFen = moveIndex === -1
     ? selectedChapter?.startFen
     : mainline[moveIndex]?.fen
 
-  function loadChapters(ch: Chapter[]) {
+  function loadChapters(ch: Chapter[], playerColor: 'white' | 'black' = 'white') {
     setChapters(ch)
     setSelectedChapter(ch[0] ?? null)
+    setActivePlayerColor(playerColor)
     setError(null)
   }
 
@@ -86,9 +117,9 @@ function App() {
         const pgn = ev.target?.result as string
         const parsed = parseStudy(pgn)
         const studyName = file.name.replace(/\.pgn$/i, '')
-        const stored = saveStudy(studyName, parsed)
+        const stored = saveStudy(studyName, uploadColor, parsed)
         setStoredStudies(loadStudies())
-        loadChapters(stored.chapters)
+        loadChapters(stored.chapters, uploadColor)
       } catch {
         setError('Failed to parse PGN file.')
       }
@@ -102,6 +133,38 @@ function App() {
     setStoredStudies(deleteStudy(id))
   }
 
+  function startQuiz() {
+    setQuizMode(true)
+    setQuizDone(false)
+    setQuizWrong(null)
+    setMoveIndex(-1)
+  }
+
+  function stopQuiz() {
+    setQuizMode(false)
+    setQuizWrong(null)
+    setQuizDone(false)
+  }
+
+  function handleQuizMove(from: string, to: string): boolean {
+    if (!quizMode || !selectedChapter || quizDone) return false
+    const fen = moveIndex === -1 ? selectedChapter.startFen : mainline[moveIndex]?.fen
+    if (!fen) return false
+    const nextIndex = moveIndex + 1
+    if (nextIndex >= mainline.length) return false
+    const chess = new Chess(fen)
+    const result = chess.move({ from, to, promotion: 'q' })
+    if (!result) return false
+    if (chess.fen() === mainline[nextIndex].fen) {
+      setQuizWrong(null)
+      setMoveIndex(nextIndex)
+      return true
+    } else {
+      setQuizWrong(mainline[nextIndex].san)
+      return false
+    }
+  }
+
   return (
     <div style={{ display: 'flex', gap: '24px', padding: '24px', alignItems: 'flex-start' }}>
       {/* Sidebar */}
@@ -113,7 +176,7 @@ function App() {
         {storedStudies.map(study => (
           <div
             key={study.id}
-            onClick={() => loadChapters(study.chapters)}
+            onClick={() => loadChapters(study.chapters, study.playerColor)}
             style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               padding: '6px 8px', marginBottom: '4px', borderRadius: '4px',
@@ -139,6 +202,16 @@ function App() {
         >
           + Upload PGN
         </button>
+        <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+          <button
+            onClick={() => setUploadColor('white')}
+            style={{ flex: 1, padding: '4px', cursor: 'pointer', fontSize: '0.75rem', borderRadius: '4px', border: '2px solid', borderColor: uploadColor === 'white' ? '#aaa' : 'transparent', background: '#f0f0f0', color: '#222', fontWeight: uploadColor === 'white' ? 'bold' : 'normal' }}
+          >♔ White</button>
+          <button
+            onClick={() => setUploadColor('black')}
+            style={{ flex: 1, padding: '4px', cursor: 'pointer', fontSize: '0.75rem', borderRadius: '4px', border: '2px solid', borderColor: uploadColor === 'black' ? '#aaa' : 'transparent', background: '#444', color: '#fff', fontWeight: uploadColor === 'black' ? 'bold' : 'normal' }}
+          >♚ Black</button>
+        </div>
         <input ref={fileInputRef} type="file" accept=".pgn" style={{ display: 'none' }} onChange={handleFileChange} />
         {error && <div style={{ color: 'red', fontSize: '0.8rem', marginTop: '6px' }}>{error}</div>}
       </div>
@@ -158,6 +231,18 @@ function App() {
               <option key={i} value={i}>{ch.title}</option>
             ))}
           </select>
+        )}
+        {selectedChapter && (
+          <button
+            onClick={quizMode ? stopQuiz : startQuiz}
+            style={{
+              padding: '6px 20px', cursor: 'pointer', alignSelf: 'flex-start',
+              background: quizMode ? '#555' : '#4a7a4a', color: '#fff',
+              border: 'none', borderRadius: '4px', fontSize: '0.9rem',
+            }}
+          >
+            {quizMode ? '■ Stop' : '▶ Practice'}
+          </button>
         )}
         {selectedChapter && (
           <div style={{ fontSize: '0.9rem', color: '#555', minHeight: '1.2em' }}>
@@ -186,7 +271,17 @@ function App() {
             </span>
           </div>
         )}
-        <Chessboard fen={currentFen} readonly={!!selectedChapter} />
+        <Chessboard
+          fen={currentFen}
+          readonly={!quizMode && !!selectedChapter}
+          playerColor={quizMode ? activePlayerColor : undefined}
+          orientation={activePlayerColor}
+          onMove={quizMode ? handleQuizMove : undefined}
+        />
+        <div style={{ maxWidth: '400px', width: '100%', padding: '8px 12px', borderRadius: '6px', textAlign: 'center', fontSize: '0.9rem', minHeight: '36px' }}>
+          {quizMode && quizDone && <span style={{ color: '#5c5', fontWeight: 'bold' }}>✓ Line complete!</span>}
+          {quizMode && quizWrong && <span style={{ color: '#e55' }}>✗ Wrong — expected <strong>{quizWrong}</strong></span>}
+        </div>
         {selectedChapter && (() => {
           const comment = moveIndex === -1
             ? selectedChapter.startComment
