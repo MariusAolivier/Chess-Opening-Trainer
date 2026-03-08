@@ -1,4 +1,5 @@
 import type { Chapter } from './pgn'
+import { deleteScoresForStudy } from './scores'
 
 export interface StoredStudy {
   id: string       // unique key, timestamp-based
@@ -30,5 +31,11 @@ export function saveStudy(name: string, playerColor: 'white' | 'black', chapters
 export function deleteStudy(id: string): StoredStudy[] {
   const studies = loadStudies().filter(s => s.id !== id)
   localStorage.setItem(KEY, JSON.stringify(studies))
+  deleteScoresForStudy(id)
   return studies
+}
+
+/** Stable id for a single chapter, combining study id and chapter index. */
+export function chapterId(studyId: string, chapterIndex: number): string {
+  return `${studyId}_${chapterIndex}`
 }

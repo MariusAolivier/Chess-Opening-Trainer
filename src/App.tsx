@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
 import Chessboard from './components/Chessboard'
 import { parseStudy, type Chapter, type MoveNode } from './lib/pgn'
-import { loadStudies, saveStudy, deleteStudy, type StoredStudy } from './lib/storage'
+import { loadStudies, saveStudy, deleteStudy, type StoredStudy, chapterId } from './lib/storage'
+import { loadScores, recordReview, initScore, type ScoreRecord } from './lib/scores'
 import { Chess } from 'chess.js'
 
 type InlineDetour = {
@@ -10,6 +11,73 @@ type InlineDetour = {
   pendingInlines: MoveNode[]
   detourLine: Array<{ fen: string; san: string; comment?: string }>
   detourIndex: number  // -1 = at fork position before any detour move is played
+}
+
+function StatsPanel({ studies, statsKey }: { studies: StoredStudy[], statsKey: number }) {
+  void statsKey // used only to trigger re-render
+  const scores = loadScores()
+  const now = Date.now()
+
+  if (scores.length === 0) {
+    return (
+      <div style={{ marginTop: '8px', fontSize: '0.78rem', color: '#888', padding: '8px', background: '#1a1a2a', borderRadius: '4px' }}>
+        No reviews yet. Run a quiz to start tracking.
+      </div>
+    )
+  }
+
+  // Build a lookup: "studyId_chapterIndex" -> study name + chapter title
+  const labelMap = new Map<string, string>()
+  studies.forEach(study => {
+    study.chapters.forEach((ch, i) => {
+      labelMap.set(`${study.id}_${i}`, `${study.name} · ${ch.title}`)
+    })
+  })
+
+  // Group by chapterId
+  const grouped = new Map<string, ScoreRecord[]>()
+  scores.forEach(r => {
+    const list = grouped.get(r.chapterId) ?? []
+    list.push(r)
+    grouped.set(r.chapterId, list)
+  })
+
+  function dueBadge(record: ScoreRecord) {
+    const msUntilDue = new Date(record.dueDate).getTime() - now
+    const daysUntilDue = msUntilDue / 86_400_000
+    if (daysUntilDue <= 0) return { label: 'Due now', color: '#e55' }
+    if (daysUntilDue < 1) return { label: `Due in ${Math.ceil(msUntilDue / 3_600_000)}h`, color: '#f0c040' }
+    return { label: `Due in ${Math.round(daysUntilDue)}d`, color: '#5c5' }
+  }
+
+  return (
+    <div style={{ marginTop: '8px', fontSize: '0.75rem', color: '#ccc' }}>
+      {[...grouped.entries()].map(([cid, records]) => (
+        <div key={cid} style={{ marginBottom: '10px' }}>
+          <div style={{ fontWeight: 'bold', color: '#aaa', marginBottom: '4px', fontSize: '0.72rem', wordBreak: 'break-word' }}>
+            {labelMap.get(cid) ?? cid}
+          </div>
+          {records.map(r => {
+            const badge = dueBadge(r)
+            return (
+              <div key={r.firstMoveSan + r.forkFen} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '3px 6px', marginBottom: '2px', borderRadius: '3px',
+                background: '#252535',
+              }}>
+                <span style={{ fontWeight: 'bold', color: '#e8e8e8' }}>{r.firstMoveSan}</span>
+                <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <span style={{ color: '#888' }}>ease {r.ease.toFixed(2)}</span>
+                  <span style={{ color: '#888' }}>{r.interval}d</span>
+                  <span style={{ color: badge.color, fontWeight: 'bold' }}>{badge.label}</span>
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function flattenDetour(root: MoveNode): Array<{ fen: string; san: string; comment?: string }> {
@@ -35,10 +103,15 @@ function App() {
   const [inlineDetour, setInlineDetour] = useState<InlineDetour | null>(null)
   const [boardResetKey, setBoardResetKey] = useState(0)
   const visitedDetourForksRef = useRef<Set<number>>(new Set())
+  const detourWrongCountRef = useRef(0)
+  const mainlineWrongCountRef = useRef<Map<number, number>>(new Map())
+  const [selectedStudyId, setSelectedStudyId] = useState<string | null>(null)
+  const [statsKey, setStatsKey] = useState(0)
   const [uploadColor, setUploadColor] = useState<'white' | 'black'>('white')
   const [activePlayerColor, setActivePlayerColor] = useState<'white' | 'black'>('white')
 
   const [showBranches, setShowBranches] = useState(false)
+  const [showStats, setShowStats] = useState(false)
 
   // Flat mainline: [{fen, san, comment, alternatives}] following the first child at each node.
   // alternatives = sibling nodes that could have been played instead of this move.
@@ -88,6 +161,8 @@ function App() {
     setQuizWrong(null)
     setInlineDetour(null)
     visitedDetourForksRef.current = new Set()
+    detourWrongCountRef.current = 0
+    mainlineWrongCountRef.current = new Map()
   }, [selectedChapter])
 
   // Keyboard navigation (disabled in quiz mode)
@@ -117,11 +192,19 @@ function App() {
       const nextDetourIndex = detourIndex + 1
 
       if (nextDetourIndex >= detourLine.length) {
-        // End of this detour – pause, then move to next pending inline or return to mainline
+        // End of this detour – record score, pause, then move to next inline or return to mainline
+        const wrongs = detourWrongCountRef.current
+        const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 3 : 1
+        if (selectedStudyId && selectedChapter) {
+          const cidx = chapters.indexOf(selectedChapter)
+          recordReview(chapterId(selectedStudyId, cidx), forkFen, detourLine[0].san, quality)
+          setStatsKey(k => k + 1)
+        }
         const t = setTimeout(() => {
           setQuizWrong(null)
           setBoardResetKey(k => k + 1) // clear last-move highlight when snapping back
           if (pendingInlines.length > 0) {
+            detourWrongCountRef.current = 0
             setInlineDetour({
               forkFen,
               forkMainlineIndex,
@@ -166,12 +249,21 @@ function App() {
           detourLine: flattenDetour(inlineAlts[0]),
           detourIndex: -1,
         })
+        detourWrongCountRef.current = 0
         return
       }
     }
 
     const colorToMove = fen.split(' ')[1] as 'w' | 'b'
     if (colorToMove !== userColor) {
+      // Opponent's move — if it's at a fork, seed score records so they appear in stats
+      const alts = mainline[nextIndex].alternatives
+      if (alts.length > 0 && selectedStudyId && selectedChapter) {
+        const cid = chapterId(selectedStudyId, chapters.indexOf(selectedChapter))
+        initScore(cid, fen, mainline[nextIndex].san)
+        alts.forEach(alt => initScore(cid, fen, alt.san))
+        setStatsKey(k => k + 1)
+      }
       const t = setTimeout(() => { setMoveIndex(nextIndex); setQuizWrong(null) }, 700)
       return () => clearTimeout(t)
     }
@@ -183,10 +275,11 @@ function App() {
       : inlineDetour.detourLine[inlineDetour.detourIndex]?.fen)
     : (moveIndex === -1 ? selectedChapter?.startFen : mainline[moveIndex]?.fen)
 
-  function loadChapters(ch: Chapter[], playerColor: 'white' | 'black' = 'white') {
+  function loadChapters(ch: Chapter[], playerColor: 'white' | 'black' = 'white', studyId?: string) {
     setChapters(ch)
     setSelectedChapter(ch[0] ?? null)
     setActivePlayerColor(playerColor)
+    setSelectedStudyId(studyId ?? null)
     setError(null)
   }
 
@@ -201,7 +294,7 @@ function App() {
         const studyName = file.name.replace(/\.pgn$/i, '')
         const stored = saveStudy(studyName, uploadColor, parsed)
         setStoredStudies(loadStudies())
-        loadChapters(stored.chapters, uploadColor)
+        loadChapters(stored.chapters, uploadColor, stored.id)
       } catch {
         setError('Failed to parse PGN file.')
       }
@@ -222,6 +315,8 @@ function App() {
     setMoveIndex(-1)
     setInlineDetour(null)
     visitedDetourForksRef.current = new Set()
+    detourWrongCountRef.current = 0
+    mainlineWrongCountRef.current = new Map()
   }
 
   function stopQuiz() {
@@ -230,6 +325,8 @@ function App() {
     setQuizDone(false)
     setInlineDetour(null)
     visitedDetourForksRef.current = new Set()
+    detourWrongCountRef.current = 0
+    mainlineWrongCountRef.current = new Map()
   }
 
   function handleQuizMove(from: string, to: string): boolean {
@@ -250,6 +347,7 @@ function App() {
         setInlineDetour(d => d ? { ...d, detourIndex: nextDetourIndex } : null)
         return true
       }
+      detourWrongCountRef.current += 1
       setQuizWrong(expected.san)
       return false
     }
@@ -262,10 +360,24 @@ function App() {
     const result = chess.move({ from, to, promotion: 'q' })
     if (!result) return false
     if (chess.fen() === mainline[nextIndex].fen) {
+      // If this is a fork point, record reviews and init scores for all alternatives
+      const alts = mainline[nextIndex].alternatives
+      if (alts.length > 0 && selectedStudyId && selectedChapter) {
+        const wrongs = mainlineWrongCountRef.current.get(nextIndex) ?? 0
+        const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 3 : 1
+        const cidx = chapters.indexOf(selectedChapter)
+        const cid = chapterId(selectedStudyId, cidx)
+        // Score the mainline move at this fork
+        recordReview(cid, fen, mainline[nextIndex].san, quality)
+        // Ensure all alternatives have a record (so they show in stats)
+        alts.forEach(alt => initScore(cid, fen, alt.san))
+        setStatsKey(k => k + 1)
+      }
       setQuizWrong(null)
       setMoveIndex(nextIndex)
       return true
     }
+    mainlineWrongCountRef.current.set(nextIndex, (mainlineWrongCountRef.current.get(nextIndex) ?? 0) + 1)
     setQuizWrong(mainline[nextIndex].san)
     return false
   }
@@ -281,7 +393,7 @@ function App() {
         {storedStudies.map(study => (
           <div
             key={study.id}
-            onClick={() => loadChapters(study.chapters, study.playerColor)}
+            onClick={() => loadChapters(study.chapters, study.playerColor, study.id)}
             style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               padding: '6px 8px', marginBottom: '4px', borderRadius: '4px',
@@ -319,6 +431,13 @@ function App() {
         </div>
         <input ref={fileInputRef} type="file" accept=".pgn" style={{ display: 'none' }} onChange={handleFileChange} />
         {error && <div style={{ color: 'red', fontSize: '0.8rem', marginTop: '6px' }}>{error}</div>}
+        <button
+          onClick={() => setShowStats(v => !v)}
+          style={{ marginTop: '12px', padding: '6px 10px', cursor: 'pointer', width: '100%', background: '#3a3a5a', color: '#ccc', border: '1px solid #555', borderRadius: '4px', fontSize: '0.8rem' }}
+        >
+          {showStats ? '▲ Hide stats' : '▼ Learning stats'}
+        </button>
+          {showStats && <StatsPanel studies={storedStudies} statsKey={statsKey} />}
       </div>
 
       {/* Board area */}
