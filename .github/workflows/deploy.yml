@@ -25,14 +25,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-        working-directory: chess-opening-trainer
 
       - name: Build
         run: pnpm build
-        working-directory: chess-opening-trainer
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./chess-opening-trainer/dist
+          publish_dir: ./dist
