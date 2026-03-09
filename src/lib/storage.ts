@@ -22,6 +22,14 @@ export function loadStudies(): StoredStudy[] {
 
 export function saveStudy(name: string, playerColor: 'white' | 'black', chapters: Chapter[]): StoredStudy {
   const studies = loadStudies()
+  const existing = studies.find(s => s.name === name)
+  if (existing) {
+    // Replace in-place, keeping the same ID so scores are preserved
+    const study: StoredStudy = { ...existing, playerColor, chapters }
+    const updated = studies.map(s => s.id === existing.id ? study : s)
+    localStorage.setItem(KEY, JSON.stringify(updated))
+    return study
+  }
   const study: StoredStudy = { id: Date.now().toString(), name, playerColor, chapters }
   studies.push(study)
   localStorage.setItem(KEY, JSON.stringify(studies))

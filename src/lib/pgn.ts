@@ -81,6 +81,26 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
 }
 
 /**
+ * Returns a map of forkFen → mainline SAN for every fork position in a chapter.
+ * A fork is any position from which the chapter has 2+ continuations (nodes.length > 1).
+ * nodes[0] is always the mainline move.
+ */
+export function extractForkMoves(chapter: Chapter): Map<string, string> {
+  const map = new Map<string, string>()
+  function walk(parentFen: string, nodes: MoveNode[]) {
+    if (nodes.length === 0) return
+    if (nodes.length > 1) {
+      map.set(parentFen, nodes[0].san)
+    }
+    for (const node of nodes) {
+      walk(node.fen, node.children)
+    }
+  }
+  walk(chapter.startFen, chapter.moves)
+  return map
+}
+
+/**
  * Parses a Lichess study PGN string (which may contain multiple chapters)
  * into an array of Chapters, each with a full move tree.
  */

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, useMemo } from 'react'
 import Chessboard from './components/Chessboard'
 import { parseStudy, type Chapter, type MoveNode } from './lib/pgn'
 import { loadStudies, saveStudy, deleteStudy, type StoredStudy, chapterId } from './lib/storage'
-import { loadScores, recordReview, initScore, type ScoreRecord } from './lib/scores'
+import { loadScores, recordReview, initScore, type ScoreRecord, updateAndResetChangedForks, findConflicts, type ConflictInfo } from './lib/scores'
+import { extractForkMoves } from './lib/pgn'
 import { Chess } from 'chess.js'
 
 type InlineDetour = {
@@ -112,6 +113,8 @@ function App() {
 
   const [showBranches, setShowBranches] = useState(false)
   const [showStats, setShowStats] = useState(false)
+  const [conflictWarnings, setConflictWarnings] = useState<ConflictInfo[]>([])
+  const [resetNotice, setResetNotice] = useState<string | null>(null)
 
   // Flat mainline: [{fen, san, comment, alternatives}] following the first child at each node.
   // alternatives = sibling nodes that could have been played instead of this move.
@@ -293,7 +296,30 @@ function App() {
         const parsed = parseStudy(pgn)
         const studyName = file.name.replace(/\.pgn$/i, '')
         const stored = saveStudy(studyName, uploadColor, parsed)
-        setStoredStudies(loadStudies())
+
+        // Update fork mainlines and reset scores where mainline moves changed
+        let totalReset = 0
+        stored.chapters.forEach((ch, i) => {
+          const cid = chapterId(stored.id, i)
+          totalReset += updateAndResetChangedForks(cid, extractForkMoves(ch))
+        })
+        if (totalReset > 0) {
+          setResetNotice(`${totalReset} score record${totalReset > 1 ? 's' : ''} reset (mainline changed)`)
+        } else {
+          setResetNotice(null)
+        }
+
+        // Detect conflicts across all chapters of all stored studies
+        const allStudies = loadStudies()
+        const allChaptersMap = new Map<string, string>()
+        allStudies.forEach(s => {
+          s.chapters.forEach((ch, i) => {
+            allChaptersMap.set(chapterId(s.id, i), `${s.name} · ${ch.title}`)
+          })
+        })
+        setConflictWarnings(findConflicts(allChaptersMap))
+
+        setStoredStudies(allStudies)
         loadChapters(stored.chapters, uploadColor, stored.id)
       } catch {
         setError('Failed to parse PGN file.')
@@ -431,6 +457,33 @@ function App() {
         </div>
         <input ref={fileInputRef} type="file" accept=".pgn" style={{ display: 'none' }} onChange={handleFileChange} />
         {error && <div style={{ color: 'red', fontSize: '0.8rem', marginTop: '6px' }}>{error}</div>}
+        {resetNotice && (
+          <div style={{ fontSize: '0.75rem', color: '#f0c040', marginTop: '4px', padding: '4px 6px', background: '#2a2a10', borderRadius: '3px', border: '1px solid #555' }}>
+            ↺ {resetNotice}
+          </div>
+        )}
+        {conflictWarnings.length > 0 && (
+          <div style={{ marginTop: '6px', background: '#3a1515', border: '1px solid #c44', borderRadius: '4px', padding: '8px', fontSize: '0.73rem', color: '#ffaaaa' }}>
+            <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+              ⚠ {conflictWarnings.length} conflicting position{conflictWarnings.length > 1 ? 's' : ''}
+            </div>
+            {conflictWarnings.map((c, idx) => (
+              <div key={idx} style={{ marginBottom: '6px', paddingBottom: '6px', borderBottom: idx < conflictWarnings.length - 1 ? '1px solid #5a2020' : 'none' }}>
+                {c.recommendations.map(r => (
+                  <div key={r.chapterId} style={{ marginBottom: '2px' }}>
+                    <span style={{ color: '#ffcccc', fontWeight: 'bold' }}>{r.mainlineSan}</span>
+                    {' — '}
+                    <span style={{ color: '#e08080', wordBreak: 'break-word' }}>{r.chapterLabel}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <button
+              onClick={() => setConflictWarnings([])}
+              style={{ marginTop: '2px', fontSize: '0.7rem', cursor: 'pointer', background: '#5a1515', border: '1px solid #c44', color: '#ffaaaa', borderRadius: '3px', padding: '2px 8px' }}
+            >Dismiss</button>
+          </div>
+        )}
         <button
           onClick={() => setShowStats(v => !v)}
           style={{ marginTop: '12px', padding: '6px 10px', cursor: 'pointer', width: '100%', background: '#3a3a5a', color: '#ccc', border: '1px solid #555', borderRadius: '4px', fontSize: '0.8rem' }}

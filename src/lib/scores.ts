@@ -117,6 +117,8 @@ export function recordReview(
 export function deleteScoresForStudy(studyId: string): void {
   const records = load().filter(r => !r.chapterId.startsWith(studyId + '_'))
   save(records)
+  const mainlines = loadForkMainlines().filter(m => !m.chapterId.startsWith(studyId + '_'))
+  saveForkMainlines(mainlines)
 }
 
 function clampEase(e: number): number {
@@ -125,3 +127,114 @@ function clampEase(e: number): number {
 
 /** Stable key for a branch — useful as React key or Map key. */
 export { makeId as scoreBranchKey }
+
+// ---------------------------------------------------------------------------
+// Fork-mainline tracking (used to detect when a re-uploaded study changes the
+// recommended move for a position, so stale scores can be reset).
+// ---------------------------------------------------------------------------
+
+const MAINLINES_KEY = 'chess-opening-trainer:fork-mainlines'
+
+interface ForkMainlineRecord {
+  chapterId: string
+  forkFen: string
+  mainlineSan: string
+}
+
+function loadForkMainlines(): ForkMainlineRecord[] {
+  try {
+    const raw = localStorage.getItem(MAINLINES_KEY)
+    return raw ? (JSON.parse(raw) as ForkMainlineRecord[]) : []
+  } catch {
+    return []
+  }
+}
+
+function saveForkMainlines(records: ForkMainlineRecord[]): void {
+  localStorage.setItem(MAINLINES_KEY, JSON.stringify(records))
+}
+
+export interface ConflictInfo {
+  forkFen: string
+  recommendations: { chapterId: string; chapterLabel: string; mainlineSan: string }[]
+}
+
+/**
+ * Update the stored fork mainlines for a chapter and reset any score records
+ * where the recommended (mainline) move at a fork position has changed.
+ * Returns the number of score records deleted.
+ */
+export function updateAndResetChangedForks(
+  chapterId: string,
+  newForkMap: Map<string, string>,  // forkFen → mainline SAN
+): number {
+  const mainlines = loadForkMainlines()
+
+  // Collect fork positions whose mainline move differs from what was stored
+  const changedFens = new Set<string>()
+  newForkMap.forEach((newMainlineSan, forkFen) => {
+    const existing = mainlines.find(m => m.chapterId === chapterId && m.forkFen === forkFen)
+    if (existing && existing.mainlineSan !== newMainlineSan) {
+      changedFens.add(forkFen)
+    }
+  })
+
+  // Delete all score records for those changed positions
+  let resetCount = 0
+  if (changedFens.size > 0) {
+    const scores = load()
+    const kept = scores.filter(r => {
+      if (r.chapterId === chapterId && changedFens.has(r.forkFen)) {
+        resetCount++
+        return false
+      }
+      return true
+    })
+    save(kept)
+  }
+
+  // Persist the updated mainlines for this chapter
+  const others = mainlines.filter(m => m.chapterId !== chapterId)
+  newForkMap.forEach((mainlineSan, forkFen) => {
+    others.push({ chapterId, forkFen, mainlineSan })
+  })
+  saveForkMainlines(others)
+
+  return resetCount
+}
+
+/**
+ * Scan all stored fork mainlines and return positions where two or more active
+ * chapters recommend different moves.
+ *
+ * @param allChapters  Map<chapterId, human-readable label>
+ */
+export function findConflicts(allChapters: Map<string, string>): ConflictInfo[] {
+  const mainlines = loadForkMainlines()
+
+  // Group by forkFen, restricted to active chapters
+  const byFen = new Map<string, { chapterId: string; mainlineSan: string }[]>()
+  mainlines.forEach(m => {
+    if (!allChapters.has(m.chapterId)) return
+    const list = byFen.get(m.forkFen) ?? []
+    list.push({ chapterId: m.chapterId, mainlineSan: m.mainlineSan })
+    byFen.set(m.forkFen, list)
+  })
+
+  const conflicts: ConflictInfo[] = []
+  byFen.forEach((entries, forkFen) => {
+    const uniqueSans = new Set(entries.map(e => e.mainlineSan))
+    if (uniqueSans.size > 1) {
+      conflicts.push({
+        forkFen,
+        recommendations: entries.map(e => ({
+          chapterId: e.chapterId,
+          chapterLabel: allChapters.get(e.chapterId) ?? e.chapterId,
+          mainlineSan: e.mainlineSan,
+        })),
+      })
+    }
+  })
+
+  return conflicts
+}
