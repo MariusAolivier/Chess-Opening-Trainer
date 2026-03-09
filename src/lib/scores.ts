@@ -1,18 +1,22 @@
 /**
  * Spaced-repetition score records.
  *
- * Each record tracks one reviewable branch point identified by:
- *   chapterId  – the StoredStudy id + chapter index (e.g. "1700000000_2")
- *   forkFen    – the FEN *before* the fork (the parent position)
- *   firstMoveSan – the SAN of the first move of the branch (variation root)
+ * Each record tracks one reviewable *line* (a complete path through the tree
+ * from the chapter start to a leaf node), identified by:
+ *   chapterId   – the StoredStudy id + chapter index (e.g. "1700000000_2")
+ *   lineId      – the FEN of the leaf (last) position of the line
+ *   lastMoveSan – the SAN of that leaf move (for display)
  *
- * This covers both inline and independent branches.
+ * One record per end-to-end line:
+ *   • the full mainline
+ *   • each inline detour
+ *   • each independent variation
  */
 
 export interface ScoreRecord {
   chapterId: string
-  forkFen: string
-  firstMoveSan: string
+  lineId: string
+  displaySan: string
   /** SM-2 ease factor, starts at 2.5 */
   ease: number
   /** Current inter-review interval in days */
@@ -26,7 +30,9 @@ const KEY = 'chess-opening-trainer:scores'
 function load(): ScoreRecord[] {
   try {
     const raw = localStorage.getItem(KEY)
-    return raw ? (JSON.parse(raw) as ScoreRecord[]) : []
+    if (!raw) return []
+    // Filter out legacy records from the old (forkFen, firstMoveSan) schema
+    return (JSON.parse(raw) as ScoreRecord[]).filter(r => typeof r.lineId === 'string')
   } catch {
     return []
   }
@@ -36,8 +42,8 @@ function save(records: ScoreRecord[]): void {
   localStorage.setItem(KEY, JSON.stringify(records))
 }
 
-function makeId(chapterId: string, forkFen: string, firstMoveSan: string): string {
-  return `${chapterId}||${forkFen}||${firstMoveSan}`
+function makeId(chapterId: string, lineId: string): string {
+  return `${chapterId}||${lineId}`
 }
 
 /** Load all score records. */
@@ -46,25 +52,20 @@ export function loadScores(): ScoreRecord[] {
 }
 
 /**
- * Ensure a score record exists for this branch.
+ * Ensure a score record exists for this line.
  * If it already exists, does nothing. If new, creates it as "due now" with interval 0.
- * Call this the first time the fork position is reached, for all alternatives.
+ * Call this at quiz start for every leaf line in the chapter.
  */
-export function initScore(chapterId: string, forkFen: string, firstMoveSan: string): void {
+export function initScore(chapterId: string, lineId: string, displaySan: string): void {
   const records = load()
-  const exists = records.some(
-    r => r.chapterId === chapterId && r.forkFen === forkFen && r.firstMoveSan === firstMoveSan
-  )
-  if (exists) return
-  records.push({ chapterId, forkFen, firstMoveSan, ease: 2.5, interval: 0, dueDate: new Date().toISOString() })
+  if (records.some(r => r.chapterId === chapterId && r.lineId === lineId)) return
+  records.push({ chapterId, lineId, displaySan, ease: 2.5, interval: 0, dueDate: new Date().toISOString() })
   save(records)
 }
 
-/** Return the score for a specific branch, or undefined if never reviewed. */
-export function getScore(chapterId: string, forkFen: string, firstMoveSan: string): ScoreRecord | undefined {
-  return load().find(
-    r => r.chapterId === chapterId && r.forkFen === forkFen && r.firstMoveSan === firstMoveSan
-  )
+/** Return the score for a specific line, or undefined if never reviewed. */
+export function getScore(chapterId: string, lineId: string): ScoreRecord | undefined {
+  return load().find(r => r.chapterId === chapterId && r.lineId === lineId)
 }
 
 /**
@@ -74,23 +75,22 @@ export function getScore(chapterId: string, forkFen: string, firstMoveSan: strin
  */
 export function recordReview(
   chapterId: string,
-  forkFen: string,
-  firstMoveSan: string,
+  lineId: string,
+  displaySan: string,
   quality: 0 | 1 | 2 | 3 | 4 | 5
 ): ScoreRecord {
   const records = load()
-  const idx = records.findIndex(
-    r => r.chapterId === chapterId && r.forkFen === forkFen && r.firstMoveSan === firstMoveSan
-  )
+  const idx = records.findIndex(r => r.chapterId === chapterId && r.lineId === lineId)
 
   const existing = idx >= 0 ? records[idx] : undefined
+  // Keep the stored displaySan if the record already exists (seeded by initScore)
+  const resolvedDisplaySan = existing?.displaySan ?? displaySan
   const ease = clampEase(
     (existing?.ease ?? 2.5) + 0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)
   )
 
   let interval: number
   if (quality < 3) {
-    // Failed — reset to 1 day
     interval = 1
   } else if (!existing || existing.interval === 0) {
     interval = 1
@@ -101,8 +101,7 @@ export function recordReview(
   }
 
   const dueDate = new Date(Date.now() + interval * 86_400_000).toISOString()
-
-  const record: ScoreRecord = { chapterId, forkFen, firstMoveSan, ease, interval, dueDate }
+  const record: ScoreRecord = { chapterId, lineId, displaySan: resolvedDisplaySan, ease, interval, dueDate }
 
   if (idx >= 0) {
     records[idx] = record
@@ -119,6 +118,25 @@ export function deleteScoresForStudy(studyId: string): void {
   save(records)
   const mainlines = loadForkMainlines().filter(m => !m.chapterId.startsWith(studyId + '_'))
   saveForkMainlines(mainlines)
+}
+
+/**
+ * Remove stale score records for a chapter — those whose lineId is no longer
+ * present in the current PGN (line was removed or its path changed).
+ * Returns the number of records removed.
+ */
+export function syncChapterLines(chapterId: string, validLineIds: Set<string>): number {
+  const records = load()
+  let removed = 0
+  const kept = records.filter(r => {
+    if (r.chapterId === chapterId && !validLineIds.has(r.lineId)) {
+      removed++
+      return false
+    }
+    return true
+  })
+  if (removed > 0) save(kept)
+  return removed
 }
 
 function clampEase(e: number): number {
@@ -159,48 +177,17 @@ export interface ConflictInfo {
   recommendations: { chapterId: string; chapterLabel: string; mainlineSan: string }[]
 }
 
-/**
- * Update the stored fork mainlines for a chapter and reset any score records
- * where the recommended (mainline) move at a fork position has changed.
- * Returns the number of score records deleted.
- */
-export function updateAndResetChangedForks(
+/** Update the stored fork mainlines for a chapter (used for conflict detection). */
+export function updateForkMainlines(
   chapterId: string,
   newForkMap: Map<string, string>,  // forkFen → mainline SAN
-): number {
+): void {
   const mainlines = loadForkMainlines()
-
-  // Collect fork positions whose mainline move differs from what was stored
-  const changedFens = new Set<string>()
-  newForkMap.forEach((newMainlineSan, forkFen) => {
-    const existing = mainlines.find(m => m.chapterId === chapterId && m.forkFen === forkFen)
-    if (existing && existing.mainlineSan !== newMainlineSan) {
-      changedFens.add(forkFen)
-    }
-  })
-
-  // Delete all score records for those changed positions
-  let resetCount = 0
-  if (changedFens.size > 0) {
-    const scores = load()
-    const kept = scores.filter(r => {
-      if (r.chapterId === chapterId && changedFens.has(r.forkFen)) {
-        resetCount++
-        return false
-      }
-      return true
-    })
-    save(kept)
-  }
-
-  // Persist the updated mainlines for this chapter
   const others = mainlines.filter(m => m.chapterId !== chapterId)
   newForkMap.forEach((mainlineSan, forkFen) => {
     others.push({ chapterId, forkFen, mainlineSan })
   })
   saveForkMainlines(others)
-
-  return resetCount
 }
 
 /**

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
 import Chessboard from './components/Chessboard'
-import { parseStudy, type Chapter, type MoveNode, extractForkMoves } from './lib/pgn'
+import { parseStudy, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
 import { loadStudies, saveStudy, deleteStudy, type StoredStudy, chapterId } from './lib/storage'
-import { loadScores, recordReview, initScore, type ScoreRecord, updateAndResetChangedForks, findConflicts, type ConflictInfo } from './lib/scores'
+import { loadScores, recordReview, initScore, type ScoreRecord, syncChapterLines, updateForkMainlines, findConflicts, type ConflictInfo } from './lib/scores'
 import { Chess } from 'chess.js'
 
 type InlineDetour = {
@@ -60,12 +60,12 @@ function StatsPanel({ studies, statsKey }: { studies: StoredStudy[], statsKey: n
           {records.map(r => {
             const badge = dueBadge(r)
             return (
-              <div key={r.firstMoveSan + r.forkFen} style={{
+              <div key={r.lineId} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 padding: '3px 6px', marginBottom: '2px', borderRadius: '3px',
                 background: '#252535',
               }}>
-                <span style={{ fontWeight: 'bold', color: '#e8e8e8' }}>{r.firstMoveSan}</span>
+                <span style={{ fontWeight: 'bold', color: '#e8e8e8' }}>{r.displaySan}</span>
                 <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                   <span style={{ color: '#888' }}>ease {r.ease.toFixed(2)}</span>
                   <span style={{ color: '#888' }}>{r.interval}d</span>
@@ -199,7 +199,9 @@ function App() {
         const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 3 : 1
         if (selectedStudyId && selectedChapter) {
           const cidx = chapters.indexOf(selectedChapter)
-          recordReview(chapterId(selectedStudyId, cidx), forkFen, detourLine[0].san, quality)
+          const detourLeaf = detourLine[detourLine.length - 1]
+          // Display name = first move of the detour (the variation root)
+          recordReview(chapterId(selectedStudyId, cidx), detourLeaf.fen, detourLine[0].san, quality)
           setStatsKey(k => k + 1)
         }
         const t = setTimeout(() => {
@@ -258,18 +260,23 @@ function App() {
 
     const colorToMove = fen.split(' ')[1] as 'w' | 'b'
     if (colorToMove !== userColor) {
-      // Opponent's move — if it's at a fork, seed score records so they appear in stats
-      const alts = mainline[nextIndex].alternatives
-      if (alts.length > 0 && selectedStudyId && selectedChapter) {
-        const cid = chapterId(selectedStudyId, chapters.indexOf(selectedChapter))
-        initScore(cid, fen, mainline[nextIndex].san)
-        alts.forEach(alt => initScore(cid, fen, alt.san))
-        setStatsKey(k => k + 1)
-      }
       const t = setTimeout(() => { setMoveIndex(nextIndex); setQuizWrong(null) }, 700)
       return () => clearTimeout(t)
     }
   }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour])
+
+  // Score the mainline when the quiz completes
+  useEffect(() => {
+    if (!quizDone || !selectedStudyId || !selectedChapter) return
+    const cid = chapterId(selectedStudyId, chapters.indexOf(selectedChapter))
+    const leaf = mainline[mainline.length - 1]
+    if (!leaf) return
+    const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((a, b) => a + b, 0)
+    const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
+    recordReview(cid, leaf.fen, 'Main line', quality)
+    setStatsKey(k => k + 1)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizDone])
 
   const currentFen = inlineDetour
     ? (inlineDetour.detourIndex === -1
@@ -296,14 +303,16 @@ function App() {
         const studyName = file.name.replace(/\.pgn$/i, '')
         const stored = saveStudy(studyName, uploadColor, parsed)
 
-        // Update fork mainlines and reset scores where mainline moves changed
+        // Sync line records (remove stale) and update fork mainlines for conflict detection
         let totalReset = 0
         stored.chapters.forEach((ch, i) => {
           const cid = chapterId(stored.id, i)
-          totalReset += updateAndResetChangedForks(cid, extractForkMoves(ch))
+          const lines = extractLines(ch)
+          totalReset += syncChapterLines(cid, new Set(lines.map(l => l.lineId)))
+          updateForkMainlines(cid, extractForkMoves(ch))
         })
         if (totalReset > 0) {
-          setResetNotice(`${totalReset} score record${totalReset > 1 ? 's' : ''} reset (mainline changed)`)
+          setResetNotice(`${totalReset} score record${totalReset > 1 ? 's' : ''} reset (line removed or changed)`)
         } else {
           setResetNotice(null)
         }
@@ -334,6 +343,11 @@ function App() {
   }
 
   function startQuiz() {
+    if (selectedStudyId && selectedChapter) {
+      const cid = chapterId(selectedStudyId, chapters.indexOf(selectedChapter))
+      extractLines(selectedChapter).forEach(l => initScore(cid, l.lineId, l.displaySan))
+      setStatsKey(k => k + 1)
+    }
     setQuizMode(true)
     setQuizDone(false)
     setQuizWrong(null)
@@ -385,19 +399,6 @@ function App() {
     const result = chess.move({ from, to, promotion: 'q' })
     if (!result) return false
     if (chess.fen() === mainline[nextIndex].fen) {
-      // If this is a fork point, record reviews and init scores for all alternatives
-      const alts = mainline[nextIndex].alternatives
-      if (alts.length > 0 && selectedStudyId && selectedChapter) {
-        const wrongs = mainlineWrongCountRef.current.get(nextIndex) ?? 0
-        const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 3 : 1
-        const cidx = chapters.indexOf(selectedChapter)
-        const cid = chapterId(selectedStudyId, cidx)
-        // Score the mainline move at this fork
-        recordReview(cid, fen, mainline[nextIndex].san, quality)
-        // Ensure all alternatives have a record (so they show in stats)
-        alts.forEach(alt => initScore(cid, fen, alt.san))
-        setStatsKey(k => k + 1)
-      }
       setQuizWrong(null)
       setMoveIndex(nextIndex)
       return true

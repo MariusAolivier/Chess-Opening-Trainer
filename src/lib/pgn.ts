@@ -81,6 +81,30 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
 }
 
 /**
+ * Returns all leaf lines in a chapter — one entry per end-to-end path through the tree.
+ * The lineId is the leaf node's FEN (unique per line); lastMoveSan is for display.
+ * This covers the mainline, every inline detour, and every independent variation.
+ */
+export function extractLines(chapter: Chapter): { lineId: string; displaySan: string }[] {
+  const lines: { lineId: string; displaySan: string }[] = []
+  // displaySan: null on the mainline path, set to variation root san when entering a branch
+  function walk(nodes: MoveNode[], branchDisplay: string | null) {
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i]
+      // Entering a variation branch for the first time — lock in its display name
+      const thisDisplay = i > 0 ? node.san : branchDisplay
+      if (node.children.length === 0) {
+        lines.push({ lineId: node.fen, displaySan: thisDisplay ?? 'Main line' })
+      } else {
+        walk(node.children, thisDisplay)
+      }
+    }
+  }
+  walk(chapter.moves, null)
+  return lines
+}
+
+/**
  * Returns a map of forkFen → mainline SAN for every fork position in a chapter.
  * A fork is any position from which the chapter has 2+ continuations (nodes.length > 1).
  * nodes[0] is always the mainline move.
