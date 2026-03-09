@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
 import Chessboard from './components/Chessboard'
-import { parseStudy, type Chapter, type MoveNode } from './lib/pgn'
+import { parseStudy, type Chapter, type MoveNode, extractForkMoves } from './lib/pgn'
 import { loadStudies, saveStudy, deleteStudy, type StoredStudy, chapterId } from './lib/storage'
 import { loadScores, recordReview, initScore, type ScoreRecord, updateAndResetChangedForks, findConflicts, type ConflictInfo } from './lib/scores'
-import { extractForkMoves } from './lib/pgn'
 import { Chess } from 'chess.js'
 
 type InlineDetour = {
