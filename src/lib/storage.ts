@@ -14,7 +14,7 @@ export function loadStudies(): StoredStudy[] {
   try {
     const raw = localStorage.getItem(KEY)
     // Spread after parse to migrate old studies that lack playerColor
-    return raw ? (JSON.parse(raw) as StoredStudy[]).map(s => ({ playerColor: 'white' as const, ...s })) : []
+    return raw ? (JSON.parse(raw) as StoredStudy[]).map(s => ({ ...s, playerColor: (s.playerColor ?? 'white') as 'white' | 'black' })) : []
   } catch {
     return []
   }
