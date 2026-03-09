@@ -56,7 +56,7 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
           ? { color: isPlayerTurn ? playerColor : undefined, free: false, dests: isPlayerTurn ? getLegalDests(chess) : new Map() }
           : { color: 'white', free: false, dests: getLegalDests(chess) },
       events: {
-        move(from, to) {
+        move(from: Key, to: Key) {
           if (isQuiz) {
             const accepted = onMoveRef.current?.(from, to)
             if (accepted === false) {

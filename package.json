@@ -11,7 +11,9 @@
     "deploy": "pnpm build && gh-pages -d dist"
   },
   "dependencies": {
+    "@lichess-org/chessground": "^10.1.0",
     "@mliebelt/pgn-parser": "^1.4.19",
+    "@mliebelt/pgn-types": "^1.0.4",
     "chess.js": "^1.4.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

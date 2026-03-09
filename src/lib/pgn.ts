@@ -59,7 +59,7 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
   }
 
   // Each variation is an alternative to `move` played from `parentFen`
-  const altNodes: MoveNode[] = move.variations.flatMap(varMoves => {
+  const altNodes: MoveNode[] = move.variations.flatMap((varMoves: PgnMove[]) => {
     if (varMoves.length === 0) return []
     const [varFirst, ...varRest] = varMoves
     chess.load(parentFen)
