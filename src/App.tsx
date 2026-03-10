@@ -90,8 +90,123 @@ function flattenDetour(root: MoveNode): Array<{ fen: string; san: string; commen
   return line
 }
 
+function RepertoirePanel({
+  studies,
+  statsKey,
+  onTrainChapter,
+}: {
+  studies: StoredStudy[]
+  statsKey: number
+  onTrainChapter: (study: StoredStudy, chapterIndex: number) => void
+}) {
+  void statsKey
+  const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set())
+  const scores = loadScores()
+  const now = Date.now()
+
+  const scoresByChapter = new Map<string, ScoreRecord[]>()
+  scores.forEach(r => {
+    const list = scoresByChapter.get(r.chapterId) ?? []
+    list.push(r)
+    scoresByChapter.set(r.chapterId, list)
+  })
+
+  function toggleStudy(id: string) {
+    setExpandedStudies(s => {
+      const n = new Set(s)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
+  }
+
+  return (
+    <div style={{ width: '100%', maxWidth: '440px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      {studies.map(study => {
+        const expanded = expandedStudies.has(study.id)
+        let totalLines = 0, startedLines = 0, dueLines = 0
+        study.chapters.forEach((ch, i) => {
+          const cid = chapterId(study.id, i)
+          const chLines = extractLines(ch)
+          const chScores = scoresByChapter.get(cid) ?? []
+          totalLines += chLines.length
+          startedLines += chLines.filter(l => chScores.some(s => s.lineId === l.lineId)).length
+          dueLines += chScores.filter(s => new Date(s.dueDate).getTime() <= now).length
+        })
+        const pct = totalLines > 0 ? Math.round((startedLines / totalLines) * 100) : 0
+
+        return (
+          <div key={study.id}>
+            <div
+              onClick={() => toggleStudy(study.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '9px 12px', borderRadius: expanded ? '6px 6px 0 0' : '6px',
+                background: '#2a2a3a', cursor: 'pointer', userSelect: 'none',
+              }}
+            >
+              <span style={{ color: '#aaa', fontSize: '0.75rem', width: '10px' }}>{expanded ? '▼' : '▶'}</span>
+              <span style={{ flex: 1, fontWeight: 'bold', color: '#e8e8e8', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{study.name}</span>
+              {dueLines > 0 && (
+                <span style={{ background: '#7a3030', color: '#ffaaaa', fontSize: '0.68rem', padding: '2px 7px', borderRadius: '10px', fontWeight: 'bold', flexShrink: 0 }}>
+                  {dueLines} due
+                </span>
+              )}
+              <span style={{ color: '#888', fontSize: '0.78rem', flexShrink: 0 }}>{pct}%</span>
+            </div>
+            <div style={{ height: '4px', background: '#1e1e1e', borderRadius: expanded ? '0' : '0 0 4px 4px', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${pct}%`, background: '#3a6a3a' }} />
+            </div>
+            {expanded && (
+              <div style={{ background: '#1e1e2e', borderRadius: '0 0 6px 6px', padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {study.chapters.map((ch, i) => {
+                  const cid = chapterId(study.id, i)
+                  const chLines = extractLines(ch)
+                  const chScores = scoresByChapter.get(cid) ?? []
+                  const chTotal = chLines.length
+                  const chStarted = chLines.filter(l => chScores.some(s => s.lineId === l.lineId)).length
+                  const chDue = chScores.filter(s => new Date(s.dueDate).getTime() <= now).length
+                  const chPct = chTotal > 0 ? Math.round((chStarted / chTotal) * 100) : 0
+                  return (
+                    <div key={i}>
+                      <div
+                        onClick={() => onTrainChapter(study, i)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          padding: '6px 10px', borderRadius: '4px 4px 0 0',
+                          background: '#252535', cursor: 'pointer',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#2e2e48')}
+                        onMouseLeave={e => (e.currentTarget.style.background = '#252535')}
+                      >
+                        <span style={{ flex: 1, color: '#ccc', fontSize: '0.83rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ch.title}</span>
+                        {chDue > 0 && (
+                          <span style={{ background: '#7a3030', color: '#ffaaaa', fontSize: '0.65rem', padding: '1px 5px', borderRadius: '10px', flexShrink: 0 }}>
+                            {chDue} due
+                          </span>
+                        )}
+                        <span style={{ color: '#888', fontSize: '0.72rem', flexShrink: 0 }}>{chPct}%</span>
+                        <span style={{ color: '#4a7a4a', fontSize: '0.75rem', flexShrink: 0 }}>▶</span>
+                      </div>
+                      <div style={{ height: '3px', background: '#1a1a2a', borderRadius: '0 0 3px 3px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${chPct}%`, background: chDue > 0 ? '#6a4a20' : '#2a5a2a' }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [view, setView] = useState<'home' | 'training'>('home')
   const [storedStudies, setStoredStudies] = useState<StoredStudy[]>(() => loadStudies())
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null)
@@ -112,6 +227,7 @@ function App() {
 
   const [showBranches, setShowBranches] = useState(false)
   const [showStats, setShowStats] = useState(false)
+  const [showRepertoire, setShowRepertoire] = useState(false)
   const [conflictWarnings, setConflictWarnings] = useState<ConflictInfo[]>([])
   const [resetNotice, setResetNotice] = useState<string | null>(null)
 
@@ -154,6 +270,13 @@ function App() {
   const userColor = useMemo(() =>
     activePlayerColor === 'white' ? 'w' : 'b'
   , [activePlayerColor])
+
+  const totalDue = useMemo(() => {
+    const scores = loadScores()
+    const now = Date.now()
+    return scores.filter(s => new Date(s.dueDate).getTime() <= now).length
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statsKey, storedStudies])
 
   // Reset position and quiz when chapter changes
   useEffect(() => {
@@ -368,6 +491,19 @@ function App() {
     mainlineWrongCountRef.current = new Map()
   }
 
+  function trainNow() {
+    if (storedStudies.length === 0) return
+    const study = storedStudies[Math.floor(Math.random() * storedStudies.length)]
+    const chapterIndex = Math.floor(Math.random() * study.chapters.length)
+    trainChapter(study, chapterIndex)
+  }
+
+  function trainChapter(study: StoredStudy, chapterIndex: number) {
+    loadChapters(study.chapters, study.playerColor, study.id)
+    setSelectedChapter(study.chapters[chapterIndex])
+    setView('training')
+  }
+
   function handleQuizMove(from: string, to: string): boolean {
     if (!quizMode || !selectedChapter || quizDone) return false
 
@@ -493,8 +629,58 @@ function App() {
           {showStats && <StatsPanel studies={storedStudies} statsKey={statsKey} />}
       </div>
 
-      {/* Board area */}
+      {view === 'home' ? (
+        /* ── Home view ── */
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', overflowY: 'auto', paddingBottom: '32px' }}>
+          <Chessboard fen={STARTING_FEN} readonly={true} />
+          <button
+            onClick={trainNow}
+            disabled={storedStudies.length === 0}
+            style={{
+              padding: '14px 52px', fontSize: '1.25rem', fontWeight: 'bold',
+              cursor: storedStudies.length > 0 ? 'pointer' : 'not-allowed',
+              background: storedStudies.length > 0 ? '#4a7a4a' : '#333',
+              color: '#fff', border: 'none', borderRadius: '8px',
+              opacity: storedStudies.length > 0 ? 1 : 0.5,
+            }}
+          >
+            ▶ Train Now{totalDue > 0 ? ` — ${totalDue} due today` : ''}
+          </button>
+          {storedStudies.length === 0 ? (
+            <p style={{ color: '#888', fontSize: '0.9rem', margin: 0 }}>
+              Upload a PGN study from the sidebar to get started.
+            </p>
+          ) : (
+            <>
+              <button
+                onClick={() => setShowRepertoire(v => !v)}
+                style={{
+                  background: 'none', border: '1px solid #444', color: '#aaa',
+                  cursor: 'pointer', borderRadius: '6px', padding: '7px 20px',
+                  fontSize: '0.9rem',
+                }}
+              >
+                My Repertoire {showRepertoire ? '↑' : '→'}
+              </button>
+              {showRepertoire && (
+                <RepertoirePanel
+                  studies={storedStudies}
+                  statsKey={statsKey}
+                  onTrainChapter={trainChapter}
+                />
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+        /* ── Training view ── */
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+        <button
+          onClick={() => { stopQuiz(); setView('home') }}
+          style={{ alignSelf: 'flex-start', background: 'none', border: '1px solid #555', color: '#aaa', cursor: 'pointer', borderRadius: '4px', padding: '4px 12px', fontSize: '0.85rem' }}
+        >
+          ← Home
+        </button>
         {chapters.length > 1 && (
           <select
             value={chapters.indexOf(selectedChapter!)}
@@ -624,6 +810,7 @@ function App() {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }
