@@ -127,12 +127,17 @@ export function extractForkMoves(chapter: Chapter): Map<string, string> {
 /**
  * Parses a Lichess study PGN string (which may contain multiple chapters)
  * into an array of Chapters, each with a full move tree.
+ * Also extracts the StudyName tag (present in Lichess exports) as the study name.
  */
-export function parseStudy(pgn: string): Chapter[] {
+export function parseStudy(pgn: string): { name: string | null; chapters: Chapter[] } {
   const games = parseGames(pgn)
   const chess = new Chess()
 
-  return games.map(game => {
+  // StudyName is the same across all chapters — read it from the first game
+  const firstTags = games[0]?.tags as Record<string, string> | undefined
+  const name = firstTags?.StudyName ?? null
+
+  const chapters = games.map(game => {
     const tags = game.tags as Record<string, string> | undefined
     const title = tags?.Event ?? 'Untitled'
     const startFen = tags?.FEN ?? START_FEN
@@ -146,4 +151,6 @@ export function parseStudy(pgn: string): Chapter[] {
       moves: buildLine(startFen, game.moves as PgnMove[], chess),
     }
   })
+
+  return { name, chapters }
 }

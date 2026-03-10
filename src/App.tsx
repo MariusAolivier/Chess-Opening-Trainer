@@ -206,7 +206,7 @@ const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [view, setView] = useState<'home' | 'training'>('home')
+  const [view, setView] = useState<'home' | 'repertoire' | 'training'>('home')
   const [storedStudies, setStoredStudies] = useState<StoredStudy[]>(() => loadStudies())
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null)
@@ -227,7 +227,6 @@ function App() {
 
   const [showBranches, setShowBranches] = useState(false)
   const [showStats, setShowStats] = useState(false)
-  const [showRepertoire, setShowRepertoire] = useState(false)
   const [conflictWarnings, setConflictWarnings] = useState<ConflictInfo[]>([])
   const [resetNotice, setResetNotice] = useState<string | null>(null)
 
@@ -422,8 +421,8 @@ function App() {
     reader.onload = ev => {
       try {
         const pgn = ev.target?.result as string
-        const parsed = parseStudy(pgn)
-        const studyName = file.name.replace(/\.pgn$/i, '')
+        const { name: parsedName, chapters: parsed } = parseStudy(pgn)
+        const studyName = parsedName ?? file.name.replace(/\.pgn$/i, '')
         const stored = saveStudy(studyName, uploadColor, parsed)
 
         // Sync line records (remove stale) and update fork mainlines for conflict detection
@@ -545,6 +544,28 @@ function App() {
   }
 
   return (
+    <>
+      {view === 'repertoire' && (
+        /* ── Repertoire full page ── */
+        <div style={{ position: 'fixed', inset: 0, background: '#1a1a2a', zIndex: 100, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+          <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '24px 24px 48px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+              <button
+                onClick={() => setView('home')}
+                style={{ background: 'none', border: '1px solid #555', color: '#aaa', cursor: 'pointer', borderRadius: '4px', padding: '4px 12px', fontSize: '0.85rem', flexShrink: 0 }}
+              >
+                ← Home
+              </button>
+              <h2 style={{ margin: 0, color: '#e8e8e8', fontSize: '1.2rem', fontWeight: 'bold' }}>My Repertoire</h2>
+            </div>
+            <RepertoirePanel
+              studies={storedStudies}
+              statsKey={statsKey}
+              onTrainChapter={trainChapter}
+            />
+          </div>
+        </div>
+      )}
     <div style={{ display: 'flex', gap: '24px', padding: '24px', alignItems: 'flex-start' }}>
       {/* Sidebar */}
       <div style={{ width: '200px', flexShrink: 0, background: '#2b2b2b', borderRadius: '8px', padding: '12px' }}>
@@ -651,27 +672,21 @@ function App() {
               Upload a PGN study from the sidebar to get started.
             </p>
           ) : (
-            <>
-              <button
-                onClick={() => setShowRepertoire(v => !v)}
-                style={{
-                  background: 'none', border: '1px solid #444', color: '#aaa',
-                  cursor: 'pointer', borderRadius: '6px', padding: '7px 20px',
-                  fontSize: '0.9rem',
-                }}
-              >
-                My Repertoire {showRepertoire ? '↑' : '→'}
-              </button>
-              {showRepertoire && (
-                <RepertoirePanel
-                  studies={storedStudies}
-                  statsKey={statsKey}
-                  onTrainChapter={trainChapter}
-                />
-              )}
-            </>
+            <button
+              onClick={() => setView('repertoire')}
+              style={{
+                background: 'none', border: '1px solid #444', color: '#aaa',
+                cursor: 'pointer', borderRadius: '6px', padding: '7px 20px',
+                fontSize: '0.9rem',
+              }}
+            >
+              My Repertoire →
+            </button>
           )}
         </div>
+      ) : view === 'repertoire' ? (
+        /* placeholder – real view is the fixed overlay above */
+        <></>
       ) : (
         /* ── Training view ── */
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
@@ -812,6 +827,7 @@ function App() {
       </div>
       )}
     </div>
+    </>
   )
 }
 
