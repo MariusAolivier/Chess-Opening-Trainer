@@ -13,73 +13,6 @@ type InlineDetour = {
   detourIndex: number  // -1 = at fork position before any detour move is played
 }
 
-function StatsPanel({ studies, statsKey }: { studies: StoredStudy[], statsKey: number }) {
-  void statsKey // used only to trigger re-render
-  const scores = loadScores()
-  const now = Date.now()
-
-  if (scores.length === 0) {
-    return (
-      <div style={{ marginTop: '8px', fontSize: '0.78rem', color: '#888', padding: '8px', background: '#1a1a2a', borderRadius: '4px' }}>
-        No reviews yet. Run a quiz to start tracking.
-      </div>
-    )
-  }
-
-  // Build a lookup: "studyId_chapterIndex" -> study name + chapter title
-  const labelMap = new Map<string, string>()
-  studies.forEach(study => {
-    study.chapters.forEach((ch, i) => {
-      labelMap.set(`${study.id}_${i}`, `${study.name} · ${ch.title}`)
-    })
-  })
-
-  // Group by chapterId
-  const grouped = new Map<string, ScoreRecord[]>()
-  scores.forEach(r => {
-    const list = grouped.get(r.chapterId) ?? []
-    list.push(r)
-    grouped.set(r.chapterId, list)
-  })
-
-  function dueBadge(record: ScoreRecord) {
-    const msUntilDue = new Date(record.dueDate).getTime() - now
-    const daysUntilDue = msUntilDue / 86_400_000
-    if (daysUntilDue <= 0) return { label: 'Due now', color: '#e55' }
-    if (daysUntilDue < 1) return { label: `Due in ${Math.ceil(msUntilDue / 3_600_000)}h`, color: '#f0c040' }
-    return { label: `Due in ${Math.round(daysUntilDue)}d`, color: '#5c5' }
-  }
-
-  return (
-    <div style={{ marginTop: '8px', fontSize: '0.75rem', color: '#ccc' }}>
-      {[...grouped.entries()].map(([cid, records]) => (
-        <div key={cid} style={{ marginBottom: '10px' }}>
-          <div style={{ fontWeight: 'bold', color: '#aaa', marginBottom: '4px', fontSize: '0.72rem', wordBreak: 'break-word' }}>
-            {labelMap.get(cid) ?? cid}
-          </div>
-          {records.map(r => {
-            const badge = dueBadge(r)
-            return (
-              <div key={r.lineId} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '3px 6px', marginBottom: '2px', borderRadius: '3px',
-                background: '#252535',
-              }}>
-                <span style={{ fontWeight: 'bold', color: '#e8e8e8' }}>{r.displaySan}</span>
-                <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <span style={{ color: '#888' }}>ease {r.ease.toFixed(2)}</span>
-                  <span style={{ color: '#888' }}>{r.interval}d</span>
-                  <span style={{ color: badge.color, fontWeight: 'bold' }}>{badge.label}</span>
-                </span>
-              </div>
-            )
-          })}
-        </div>
-      ))}
-    </div>
-  )
-}
-
 function flattenDetour(root: MoveNode): Array<{ fen: string; san: string; comment?: string }> {
   const line: Array<{ fen: string; san: string; comment?: string }> = []
   let node: MoveNode | undefined = root
@@ -94,10 +27,12 @@ function RepertoirePanel({
   studies,
   statsKey,
   onTrainChapter,
+  onDeleteStudy,
 }: {
   studies: StoredStudy[]
   statsKey: number
   onTrainChapter: (study: StoredStudy, chapterIndex: number) => void
+  onDeleteStudy: (id: string) => void
 }) {
   void statsKey
   const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set())
@@ -152,6 +87,11 @@ function RepertoirePanel({
                 </span>
               )}
               <span style={{ color: '#888', fontSize: '0.78rem', flexShrink: 0 }}>{pct}%</span>
+              <button
+                onClick={e => { e.stopPropagation(); onDeleteStudy(study.id) }}
+                title="Delete study"
+                style={{ marginLeft: '4px', border: 'none', background: 'none', cursor: 'pointer', color: '#888', fontSize: '1rem', lineHeight: 1, flexShrink: 0, padding: '0 2px' }}
+              >×</button>
             </div>
             <div style={{ height: '4px', background: '#1e1e1e', borderRadius: expanded ? '0' : '0 0 4px 4px', overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${pct}%`, background: '#3a6a3a' }} />
@@ -226,7 +166,6 @@ function App() {
   const [activePlayerColor, setActivePlayerColor] = useState<'white' | 'black'>('white')
 
   const [showBranches, setShowBranches] = useState(false)
-  const [showStats, setShowStats] = useState(false)
   const [conflictWarnings, setConflictWarnings] = useState<ConflictInfo[]>([])
   const [resetNotice, setResetNotice] = useState<string | null>(null)
 
@@ -459,11 +398,6 @@ function App() {
     e.target.value = ''
   }
 
-  function handleDeleteStudy(id: string, e: React.MouseEvent) {
-    e.stopPropagation()
-    setStoredStudies(deleteStudy(id))
-  }
-
   function startQuiz() {
     if (selectedStudyId && selectedChapter) {
       const cid = chapterId(selectedStudyId, chapters.indexOf(selectedChapter))
@@ -558,97 +492,64 @@ function App() {
               </button>
               <h2 style={{ margin: 0, color: '#e8e8e8', fontSize: '1.2rem', fontWeight: 'bold' }}>My Repertoire</h2>
             </div>
+            {storedStudies.length === 0 && (
+              <p style={{ color: '#888', fontSize: '0.9rem', marginBottom: '16px' }}>No studies yet. Upload a PGN to get started.</p>
+            )}
             <RepertoirePanel
               studies={storedStudies}
               statsKey={statsKey}
               onTrainChapter={trainChapter}
+              onDeleteStudy={id => setStoredStudies(deleteStudy(id))}
             />
+            {/* Upload section */}
+            <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid #2e2e3e' }}>
+              <div style={{ fontWeight: 'bold', color: '#aaa', fontSize: '0.85rem', marginBottom: '10px' }}>Upload study</div>
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                <button
+                  onClick={() => setUploadColor('white')}
+                  style={{ flex: 1, padding: '6px', cursor: 'pointer', fontSize: '0.8rem', borderRadius: '4px', border: '2px solid', borderColor: uploadColor === 'white' ? '#aaa' : 'transparent', background: '#f0f0f0', color: '#222', fontWeight: uploadColor === 'white' ? 'bold' : 'normal' }}
+                >♔ White</button>
+                <button
+                  onClick={() => setUploadColor('black')}
+                  style={{ flex: 1, padding: '6px', cursor: 'pointer', fontSize: '0.8rem', borderRadius: '4px', border: '2px solid', borderColor: uploadColor === 'black' ? '#aaa' : 'transparent', background: '#444', color: '#fff', fontWeight: uploadColor === 'black' ? 'bold' : 'normal' }}
+                >♚ Black</button>
+              </div>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                style={{ padding: '8px 16px', cursor: 'pointer', width: '100%', background: '#2a2a3a', color: '#ccc', border: '1px solid #444', borderRadius: '6px', fontSize: '0.9rem' }}
+              >+ Upload PGN</button>
+              <input ref={fileInputRef} type="file" accept=".pgn" style={{ display: 'none' }} onChange={handleFileChange} />
+              {error && <div style={{ color: '#e55', fontSize: '0.82rem', marginTop: '8px' }}>{error}</div>}
+              {resetNotice && (
+                <div style={{ fontSize: '0.78rem', color: '#f0c040', marginTop: '8px', padding: '6px 8px', background: '#2a2a10', borderRadius: '4px', border: '1px solid #555' }}>
+                  ↺ {resetNotice}
+                </div>
+              )}
+              {conflictWarnings.length > 0 && (
+                <div style={{ marginTop: '10px', background: '#3a1515', border: '1px solid #c44', borderRadius: '6px', padding: '10px', fontSize: '0.78rem', color: '#ffaaaa' }}>
+                  <div style={{ fontWeight: 'bold', marginBottom: '6px' }}>⚠ {conflictWarnings.length} conflicting position{conflictWarnings.length > 1 ? 's' : ''}</div>
+                  {conflictWarnings.map((c, idx) => (
+                    <div key={idx} style={{ marginBottom: '6px', paddingBottom: '6px', borderBottom: idx < conflictWarnings.length - 1 ? '1px solid #5a2020' : 'none' }}>
+                      {c.recommendations.map(r => (
+                        <div key={r.chapterId} style={{ marginBottom: '2px' }}>
+                          <span style={{ color: '#ffcccc', fontWeight: 'bold' }}>{r.mainlineSan}</span>
+                          {' — '}
+                          <span style={{ color: '#e08080', wordBreak: 'break-word' }}>{r.chapterLabel}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => setConflictWarnings([])}
+                    style={{ fontSize: '0.72rem', cursor: 'pointer', background: '#5a1515', border: '1px solid #c44', color: '#ffaaaa', borderRadius: '3px', padding: '3px 10px' }}
+                  >Dismiss</button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
     <div style={{ display: 'flex', gap: '24px', padding: '24px', alignItems: 'flex-start' }}>
-      {/* Sidebar */}
-      <div style={{ width: '200px', flexShrink: 0, background: '#2b2b2b', borderRadius: '8px', padding: '12px' }}>
-        <div style={{ fontWeight: 'bold', marginBottom: '8px', color: '#f0f0f0' }}>Studies</div>
-        {storedStudies.length === 0 && (
-          <div style={{ fontSize: '0.85rem', color: '#999' }}>No studies yet</div>
-        )}
-        {storedStudies.map(study => (
-          <div
-            key={study.id}
-            onClick={() => loadChapters(study.chapters, study.playerColor, study.id)}
-            style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '6px 8px', marginBottom: '4px', borderRadius: '4px',
-              cursor: 'pointer', background: chapters === study.chapters ? '#4a4a7a' : '#3a3a3a',
-              fontSize: '0.875rem', color: '#e8e8e8',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = '#4a4a5a')}
-            onMouseLeave={e => (e.currentTarget.style.background = chapters === study.chapters ? '#4a4a7a' : '#3a3a3a')}
-          >
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {study.name}
-            </span>
-            <button
-              onClick={e => handleDeleteStudy(study.id, e)}
-              title="Delete"
-              style={{ marginLeft: '6px', border: 'none', background: 'none', cursor: 'pointer', color: '#aaa', fontSize: '1rem', lineHeight: 1, flexShrink: 0 }}
-            >×</button>
-          </div>
-        ))}
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          style={{ marginTop: '10px', padding: '6px 10px', cursor: 'pointer', width: '100%' }}
-        >
-          + Upload PGN
-        </button>
-        <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
-          <button
-            onClick={() => setUploadColor('white')}
-            style={{ flex: 1, padding: '4px', cursor: 'pointer', fontSize: '0.75rem', borderRadius: '4px', border: '2px solid', borderColor: uploadColor === 'white' ? '#aaa' : 'transparent', background: '#f0f0f0', color: '#222', fontWeight: uploadColor === 'white' ? 'bold' : 'normal' }}
-          >♔ White</button>
-          <button
-            onClick={() => setUploadColor('black')}
-            style={{ flex: 1, padding: '4px', cursor: 'pointer', fontSize: '0.75rem', borderRadius: '4px', border: '2px solid', borderColor: uploadColor === 'black' ? '#aaa' : 'transparent', background: '#444', color: '#fff', fontWeight: uploadColor === 'black' ? 'bold' : 'normal' }}
-          >♚ Black</button>
-        </div>
-        <input ref={fileInputRef} type="file" accept=".pgn" style={{ display: 'none' }} onChange={handleFileChange} />
-        {error && <div style={{ color: 'red', fontSize: '0.8rem', marginTop: '6px' }}>{error}</div>}
-        {resetNotice && (
-          <div style={{ fontSize: '0.75rem', color: '#f0c040', marginTop: '4px', padding: '4px 6px', background: '#2a2a10', borderRadius: '3px', border: '1px solid #555' }}>
-            ↺ {resetNotice}
-          </div>
-        )}
-        {conflictWarnings.length > 0 && (
-          <div style={{ marginTop: '6px', background: '#3a1515', border: '1px solid #c44', borderRadius: '4px', padding: '8px', fontSize: '0.73rem', color: '#ffaaaa' }}>
-            <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-              ⚠ {conflictWarnings.length} conflicting position{conflictWarnings.length > 1 ? 's' : ''}
-            </div>
-            {conflictWarnings.map((c, idx) => (
-              <div key={idx} style={{ marginBottom: '6px', paddingBottom: '6px', borderBottom: idx < conflictWarnings.length - 1 ? '1px solid #5a2020' : 'none' }}>
-                {c.recommendations.map(r => (
-                  <div key={r.chapterId} style={{ marginBottom: '2px' }}>
-                    <span style={{ color: '#ffcccc', fontWeight: 'bold' }}>{r.mainlineSan}</span>
-                    {' — '}
-                    <span style={{ color: '#e08080', wordBreak: 'break-word' }}>{r.chapterLabel}</span>
-                  </div>
-                ))}
-              </div>
-            ))}
-            <button
-              onClick={() => setConflictWarnings([])}
-              style={{ marginTop: '2px', fontSize: '0.7rem', cursor: 'pointer', background: '#5a1515', border: '1px solid #c44', color: '#ffaaaa', borderRadius: '3px', padding: '2px 8px' }}
-            >Dismiss</button>
-          </div>
-        )}
-        <button
-          onClick={() => setShowStats(v => !v)}
-          style={{ marginTop: '12px', padding: '6px 10px', cursor: 'pointer', width: '100%', background: '#3a3a5a', color: '#ccc', border: '1px solid #555', borderRadius: '4px', fontSize: '0.8rem' }}
-        >
-          {showStats ? '▲ Hide stats' : '▼ Learning stats'}
-        </button>
-          {showStats && <StatsPanel studies={storedStudies} statsKey={statsKey} />}
-      </div>
 
       {view === 'home' ? (
         /* ── Home view ── */
