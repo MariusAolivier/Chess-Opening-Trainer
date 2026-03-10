@@ -502,7 +502,7 @@ function App() {
               onDeleteStudy={id => setStoredStudies(deleteStudy(id))}
             />
             {/* Upload section */}
-            <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid #2e2e3e' }}>
+            <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid #2e2e3e', width: '100%', maxWidth: '440px' }}>
               <div style={{ fontWeight: 'bold', color: '#aaa', fontSize: '0.85rem', marginBottom: '10px' }}>Upload study</div>
               <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                 <button
@@ -549,11 +549,11 @@ function App() {
           </div>
         </div>
       )}
-    <div style={{ display: 'flex', gap: '24px', padding: '24px', alignItems: 'flex-start' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', boxSizing: 'border-box' }}>
 
       {view === 'home' ? (
         /* ── Home view ── */
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', overflowY: 'auto', paddingBottom: '32px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', paddingBottom: '32px' }}>
           <Chessboard fen={STARTING_FEN} readonly={true} />
           <button
             onClick={trainNow}
