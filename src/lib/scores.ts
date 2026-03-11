@@ -172,6 +172,23 @@ function clampEase(e: number): number {
 /** Stable key for a branch — useful as React key or Map key. */
 export { makeId as scoreBranchKey }
 
+/** Write a full set of score records (used by sync on remote update). */
+export function importAllScores(records: ScoreRecord[]): void {
+  save(records)
+}
+
+/** Read the raw fork mainlines array (used by sync to upload). */
+export function exportForkMainlines(): ForkMainlineRecord[] {
+  return loadForkMainlines()
+}
+
+/** Overwrite fork mainlines (used by sync on pull from Firestore). */
+export function importForkMainlines(records: ForkMainlineRecord[]): void {
+  saveForkMainlines(records)
+}
+
+export type { ForkMainlineRecord }
+
 // ---------------------------------------------------------------------------
 // Fork-mainline tracking (used to detect when a re-uploaded study changes the
 // recommended move for a position, so stale scores can be reset).

@@ -4,6 +4,7 @@ import Chessboard from './components/Chessboard'
 import { parseStudy, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
 import { loadStudies, saveStudy, deleteStudy, deleteChapter, type StoredStudy, chapterId } from './lib/storage'
 import { loadScores, recordReview, initScore, type ScoreRecord, syncChapterLines, updateForkMainlines, findConflicts, type ConflictInfo } from './lib/scores'
+import { fetchAndMerge, uploadStudy, deleteStudyRemote, uploadScores, uploadForkMainlines, subscribeToScores } from './lib/sync'
 import { Chess } from 'chess.js'
 
 type InlineDetour = {
@@ -213,6 +214,7 @@ function App() {
   const [quizMode, setQuizMode] = useState(false)
   const [quizDone, setQuizDone] = useState(false)
   const [quizWrong, setQuizWrong] = useState<string | null>(null)
+  const [revealedAnswer, setRevealedAnswer] = useState(false)
   const [inlineDetour, setInlineDetour] = useState<InlineDetour | null>(null)
   const [boardResetKey, setBoardResetKey] = useState(0)
   const visitedDetourForksRef = useRef<Set<number>>(new Set())
@@ -228,6 +230,20 @@ function App() {
   const [resetNotice, setResetNotice] = useState<string | null>(null)
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
+
+  // Sync with Firestore on mount, then subscribe to score changes from other devices
+  useEffect(() => {
+    fetchAndMerge().then(changed => {
+      if (changed) {
+        setStoredStudies(loadStudies())
+        setStatsKey(k => k + 1)
+      }
+    })
+    const unsub = subscribeToScores(() => {
+      setStatsKey(k => k + 1)
+    })
+    return unsub
+  }, [])
 
   // Flat mainline: [{fen, san, comment, alternatives}] following the first child at each node.
   // alternatives = sibling nodes that could have been played instead of this move.
@@ -279,9 +295,9 @@ function App() {
   // Reset position and quiz when chapter changes
   useEffect(() => {
     setMoveIndex(-1)
-    setQuizMode(false)
     setQuizDone(false)
     setQuizWrong(null)
+    setRevealedAnswer(false)
     setInlineDetour(null)
     visitedDetourForksRef.current = new Set()
     detourWrongCountRef.current = 0
@@ -323,6 +339,7 @@ function App() {
           const detourLeaf = detourLine[detourLine.length - 1]
           // Display name = first move of the detour (the variation root)
           recordReview(chapterId(selectedStudyId, cidx), detourLeaf.fen, detourLine[0].san, quality)
+          uploadScores()
           setStatsKey(k => k + 1)
         }
         const t = setTimeout(() => {
@@ -395,7 +412,16 @@ function App() {
     const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((a, b) => a + b, 0)
     const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
     recordReview(cid, leaf.fen, 'Main line', quality)
+    uploadScores()
     setStatsKey(k => k + 1)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizDone])
+
+  // Auto-advance to the next chapter when a line is completed
+  useEffect(() => {
+    if (!quizDone) return
+    const t = setTimeout(pickAndTrainNext, 500)
+    return () => clearTimeout(t)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quizDone])
 
@@ -449,6 +475,9 @@ function App() {
         setConflictWarnings(findConflicts(allChaptersMap))
 
         setStoredStudies(allStudies)
+        uploadStudy(stored)
+        uploadScores()
+        uploadForkMainlines()
         loadChapters(stored.chapters, uploadColor, stored.id)
       } catch {
         setError('Failed to parse PGN file.')
@@ -468,40 +497,35 @@ function App() {
     mainlineWrongCountRef.current = new Map()
   }
 
-  function trainNow() {
+  function pickAndTrainNext() {
     if (storedStudies.length === 0) return
-    const study = storedStudies[Math.floor(Math.random() * storedStudies.length)]
-    const chapterIndex = Math.floor(Math.random() * study.chapters.length)
-    trainChapter(study, chapterIndex)
-  }
-
-  function trainFromSelection() {
-    if (selectedChapterIds.size === 0) return
     const scores = loadScores()
     const now = Date.now()
 
-    // Build a flat list of {study, chapterIndex} for all selected chapters
     type Entry = { study: StoredStudy; chapterIndex: number }
     const all: Entry[] = []
     storedStudies.forEach(study => {
       study.chapters.forEach((_, i) => {
-        if (selectedChapterIds.has(chapterId(study.id, i))) {
-          all.push({ study, chapterIndex: i })
-        }
+        const cid = chapterId(study.id, i)
+        if (selectedChapterIds.size > 0 && !selectedChapterIds.has(cid)) return
+        all.push({ study, chapterIndex: i })
       })
     })
+    if (all.length === 0) return
 
-    // Prefer chapters that have at least one due line; fall back to any selected chapter
     const due = all.filter(({ study, chapterIndex: i }) => {
       const cid = chapterId(study.id, i)
       return scores.some(s => s.chapterId === cid && new Date(s.dueDate).getTime() <= now)
     })
     const pool = due.length > 0 ? due : all
     const { study, chapterIndex } = pool[Math.floor(Math.random() * pool.length)]
-
-    setSelectionMode(false)
-    setSelectedChapterIds(new Set())
     trainChapter(study, chapterIndex)
+  }
+
+  function trainFromSelection() {
+    if (selectedChapterIds.size === 0) return
+    setSelectionMode(false)
+    pickAndTrainNext()
   }
 
   function toggleChapter(cid: string) {
@@ -564,6 +588,7 @@ function App() {
       }
       detourWrongCountRef.current += 1
       setQuizWrong(expected.san)
+      setRevealedAnswer(false)
       return false
     }
 
@@ -576,11 +601,13 @@ function App() {
     if (!result) return false
     if (chess.fen() === mainline[nextIndex].fen) {
       setQuizWrong(null)
+      setRevealedAnswer(false)
       setMoveIndex(nextIndex)
       return true
     }
     mainlineWrongCountRef.current.set(nextIndex, (mainlineWrongCountRef.current.get(nextIndex) ?? 0) + 1)
     setQuizWrong(mainline[nextIndex].san)
+    setRevealedAnswer(false)
     return false
   }
 
@@ -606,8 +633,21 @@ function App() {
               studies={storedStudies}
               statsKey={statsKey}
               onTrainChapter={trainChapter}
-              onDeleteStudy={id => setStoredStudies(deleteStudy(id))}
-              onDeleteChapter={(studyId, chapterIndex) => setStoredStudies(deleteChapter(studyId, chapterIndex))}
+              onDeleteStudy={id => {
+                setStoredStudies(deleteStudy(id))
+                deleteStudyRemote(id)
+                uploadScores()
+                uploadForkMainlines()
+              }}
+              onDeleteChapter={(studyId, chapterIndex) => {
+                const updated = deleteChapter(studyId, chapterIndex)
+                setStoredStudies(updated)
+                const updatedStudy = updated.find(s => s.id === studyId)
+                if (updatedStudy) uploadStudy(updatedStudy)
+                else deleteStudyRemote(studyId)
+                uploadScores()
+                uploadForkMainlines()
+              }}
               selectionMode={selectionMode}
               selectedChapterIds={selectedChapterIds}
               onToggleChapter={toggleChapter}
@@ -704,7 +744,7 @@ function App() {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', paddingBottom: '32px' }}>
           <Chessboard fen={STARTING_FEN} readonly={true} />
           <button
-            onClick={trainNow}
+            onClick={pickAndTrainNext}
             disabled={storedStudies.length === 0}
             style={{
               padding: '14px 52px', fontSize: '1.25rem', fontWeight: 'bold',
@@ -811,7 +851,27 @@ function App() {
         />
         <div style={{ maxWidth: '400px', width: '100%', padding: '8px 12px', borderRadius: '6px', textAlign: 'center', fontSize: '0.9rem', minHeight: '36px' }}>
           {quizMode && quizDone && <span style={{ color: '#5c5', fontWeight: 'bold' }}>✓ Line complete!</span>}
-          {quizMode && quizWrong && <span style={{ color: '#e55' }}>✗ Wrong — expected <strong>{quizWrong}</strong></span>}
+          {quizMode && quizWrong && !revealedAnswer && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+              <span style={{ color: '#e55' }}>✗ Wrong move</span>
+              <button
+                onClick={() => {
+                  setRevealedAnswer(true)
+                  // Force worst score for this position
+                  if (inlineDetour) {
+                    detourWrongCountRef.current = 99
+                  } else {
+                    const nextIndex = moveIndex + 1
+                    mainlineWrongCountRef.current.set(nextIndex, 99)
+                  }
+                }}
+                style={{ padding: '4px 16px', cursor: 'pointer', background: '#3a2020', color: '#ffaaaa', border: '1px solid #7a3030', borderRadius: '4px', fontSize: '0.82rem' }}
+              >Reveal answer</button>
+            </div>
+          )}
+          {quizMode && quizWrong && revealedAnswer && (
+            <span style={{ color: '#e55' }}>✗ Wrong — expected <strong>{quizWrong}</strong></span>
+          )}
         </div>
         {selectedChapter && (() => {
           const comment = inlineDetour && inlineDetour.detourIndex >= 0
