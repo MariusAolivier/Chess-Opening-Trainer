@@ -7,6 +7,23 @@ import '@lichess-org/chessground/assets/chessground.brown.css'
 import '@lichess-org/chessground/assets/chessground.cburnett.css'
 import './chessboard-overrides.css'
 
+function playMoveSound(from: string, to: string, preMoveChess: Chess) {
+  const temp = new Chess(preMoveChess.fen())
+  const move = temp.move({ from, to, promotion: 'q' })
+  if (!move) return
+  let file: string
+  if (temp.inCheck()) {
+    file = 'move-check.mp3'
+  } else if (move.flags.includes('k') || move.flags.includes('q')) {
+    file = 'castle.mp3'
+  } else if (move.flags.includes('c') || move.flags.includes('e')) {
+    file = 'capture.mp3'
+  } else {
+    file = 'move-self.mp3'
+  }
+  new Audio(import.meta.env.BASE_URL + file).play().catch(() => {})
+}
+
 function getLegalDests(chess: Chess): Map<Key, Key[]> {
   const dests = new Map<Key, Key[]>()
   chess.moves({ verbose: true }).forEach(m => {
@@ -37,6 +54,7 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
   useEffect(() => { onMoveRef.current = onMove }, [onMove])
   const fenRef = useRef(fen)
   useEffect(() => { fenRef.current = fen }, [fen])
+  const prevFenRef = useRef(fen)
   const prevResetKeyRef = useRef(resetKey)
 
   // Init (or reinit) when interaction mode changes
@@ -60,6 +78,9 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
         move(from: Key, to: Key) {
           if (isQuiz) {
             const accepted = onMoveRef.current?.(from, to)
+            if (accepted !== false) {
+              playMoveSound(from, to, new Chess(fenRef.current ?? undefined))
+            }
             if (accepted === false) {
               // Wrong move — snap back instantly without animation
               const currentFen = fenRef.current
@@ -80,6 +101,7 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
               requestAnimationFrame(() => { ground.set({ animation: { enabled: true } }) })
             }
           } else if (!readonly) {
+            playMoveSound(from, to, chess)
             chess.move({ from, to, promotion: 'q' })
             const nextColor = chess.turn() === 'w' ? 'white' as const : 'black' as const
             ground.set({
@@ -104,6 +126,8 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
     if (!g) return
     const isReset = resetKey !== prevResetKeyRef.current
     prevResetKeyRef.current = resetKey
+    const prevFen = prevFenRef.current
+    prevFenRef.current = fen
     if (!readonly && playerColor) {
       const chess = new Chess(fen ?? undefined)
       const fenColor = chess.turn() === 'w' ? 'white' as const : 'black' as const
@@ -118,6 +142,16 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
           dests: isPlayerTurn ? getLegalDests(chess) : new Map(),
         },
       })
+      // Play sound for opponent's auto-moves: fen changed and it's now the player's turn
+      if (!isReset && isPlayerTurn && prevFen && prevFen !== fen) {
+        const prevChess = new Chess(prevFen)
+        const m = prevChess.moves({ verbose: true }).find(mv => {
+          const t = new Chess(prevFen)
+          t.move(mv)
+          return t.fen() === fen
+        })
+        if (m) playMoveSound(m.from, m.to, prevChess)
+      }
     } else {
       g.set({ fen: fen ?? 'start', lastMove: isReset ? [] : undefined })
     }
