@@ -65,7 +65,7 @@ function RepertoirePanel({
           const chLines = extractLines(ch)
           const chScores = scoresByChapter.get(cid) ?? []
           totalLines += chLines.length
-          startedLines += chLines.filter(l => chScores.some(s => s.lineId === l.lineId)).length
+          startedLines += chLines.filter(l => chScores.some(s => s.lineId === l.lineId && s.interval > 0)).length
           dueLines += chScores.filter(s => new Date(s.dueDate).getTime() <= now).length
         })
         const pct = totalLines > 0 ? Math.round((startedLines / totalLines) * 100) : 0
@@ -104,7 +104,7 @@ function RepertoirePanel({
                   const chLines = extractLines(ch)
                   const chScores = scoresByChapter.get(cid) ?? []
                   const chTotal = chLines.length
-                  const chStarted = chLines.filter(l => chScores.some(s => s.lineId === l.lineId)).length
+                  const chStarted = chLines.filter(l => chScores.some(s => s.lineId === l.lineId && s.interval > 0)).length
                   const chDue = chScores.filter(s => new Date(s.dueDate).getTime() <= now).length
                   const chPct = chTotal > 0 ? Math.round((chStarted / chTotal) * 100) : 0
                   return (
