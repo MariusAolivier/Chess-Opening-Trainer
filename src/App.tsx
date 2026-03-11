@@ -569,9 +569,16 @@ function App() {
             ▶ Train Now{totalDue > 0 ? ` — ${totalDue} due today` : ''}
           </button>
           {storedStudies.length === 0 ? (
-            <p style={{ color: '#888', fontSize: '0.9rem', margin: 0 }}>
-              Upload a PGN study from the sidebar to get started.
-            </p>
+            <button
+              onClick={() => setView('repertoire')}
+              style={{
+                background: 'none', border: '1px solid #444', color: '#aaa',
+                cursor: 'pointer', borderRadius: '6px', padding: '7px 20px',
+                fontSize: '0.9rem',
+              }}
+            >
+              + Create Repertoire
+            </button>
           ) : (
             <button
               onClick={() => setView('repertoire')}
