@@ -230,15 +230,26 @@ function App() {
   const [resetNotice, setResetNotice] = useState<string | null>(null)
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'ok' | 'error'>('idle')
+  const [syncError, setSyncError] = useState<string | null>(null)
 
   // Sync with Firestore on mount, then subscribe to score changes from other devices
   useEffect(() => {
-    fetchAndMerge().then(changed => {
-      if (changed) {
-        setStoredStudies(loadStudies())
-        setStatsKey(k => k + 1)
-      }
-    })
+    setSyncStatus('syncing')
+    fetchAndMerge()
+      .then(changed => {
+        setSyncStatus('ok')
+        if (changed) {
+          setStoredStudies(loadStudies())
+          setStatsKey(k => k + 1)
+        }
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[sync] fetchAndMerge failed:', err)
+        setSyncStatus('error')
+        setSyncError(msg)
+      })
     const unsub = subscribeToScores(() => {
       setStatsKey(k => k + 1)
     })
@@ -742,6 +753,17 @@ function App() {
       {view === 'home' ? (
         /* ── Home view ── */
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', paddingBottom: '32px' }}>
+          {syncStatus === 'error' && (
+            <div style={{ fontSize: '0.75rem', color: '#ff8888', background: '#2a1010', border: '1px solid #8a3030', borderRadius: '6px', padding: '6px 12px', maxWidth: '340px', wordBreak: 'break-word' }}>
+              ✗ Sync error: {syncError}
+            </div>
+          )}
+          {syncStatus === 'syncing' && (
+            <div style={{ fontSize: '0.75rem', color: '#aaa' }}>⟳ Syncing…</div>
+          )}
+          {syncStatus === 'ok' && (
+            <div style={{ fontSize: '0.75rem', color: '#5a9a5a' }}>✓ Synced</div>
+          )}
           <Chessboard fen={STARTING_FEN} readonly={true} />
           <button
             onClick={pickAndTrainNext}
