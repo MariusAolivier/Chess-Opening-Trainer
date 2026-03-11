@@ -1,5 +1,5 @@
 import type { Chapter } from './pgn'
-import { deleteScoresForStudy } from './scores'
+import { deleteScoresForStudy, deleteAndReindexChapter } from './scores'
 
 export interface StoredStudy {
   id: string       // unique key, timestamp-based
@@ -41,6 +41,24 @@ export function deleteStudy(id: string): StoredStudy[] {
   localStorage.setItem(KEY, JSON.stringify(studies))
   deleteScoresForStudy(id)
   return studies
+}
+
+/**
+ * Remove a single chapter from a study. If it was the last chapter, the whole
+ * study is removed. Scores for the deleted chapter are removed and subsequent
+ * chapter scores are re-indexed. Returns the updated studies list.
+ */
+export function deleteChapter(studyId: string, chapterIndex: number): StoredStudy[] {
+  const studies = loadStudies()
+  const updated = studies
+    .map(s => {
+      if (s.id !== studyId) return s
+      return { ...s, chapters: s.chapters.filter((_, i) => i !== chapterIndex) }
+    })
+    .filter(s => s.chapters.length > 0)
+  localStorage.setItem(KEY, JSON.stringify(updated))
+  deleteAndReindexChapter(studyId, chapterIndex)
+  return updated
 }
 
 /** Stable id for a single chapter, combining study id and chapter index. */

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo } from 'react'
 import './App.css'
 import Chessboard from './components/Chessboard'
 import { parseStudy, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
-import { loadStudies, saveStudy, deleteStudy, type StoredStudy, chapterId } from './lib/storage'
+import { loadStudies, saveStudy, deleteStudy, deleteChapter, type StoredStudy, chapterId } from './lib/storage'
 import { loadScores, recordReview, initScore, type ScoreRecord, syncChapterLines, updateForkMainlines, findConflicts, type ConflictInfo } from './lib/scores'
 import { Chess } from 'chess.js'
 
@@ -29,6 +29,7 @@ function RepertoirePanel({
   statsKey,
   onTrainChapter,
   onDeleteStudy,
+  onDeleteChapter,
   selectionMode,
   selectedChapterIds,
   onToggleChapter,
@@ -38,6 +39,7 @@ function RepertoirePanel({
   statsKey: number
   onTrainChapter: (study: StoredStudy, chapterIndex: number) => void
   onDeleteStudy: (id: string) => void
+  onDeleteChapter: (studyId: string, chapterIndex: number) => void
   selectionMode: boolean
   selectedChapterIds: Set<string>
   onToggleChapter: (cid: string) => void
@@ -62,13 +64,6 @@ function RepertoirePanel({
       return n
     })
   }
-
-  // Auto-expand all studies when entering selection mode so chapters are visible
-  useEffect(() => {
-    if (selectionMode) {
-      setExpandedStudies(new Set(studies.map(s => s.id)))
-    }
-  }, [selectionMode, studies])
 
   return (
     <div style={{ width: '100%', maxWidth: '440px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -122,8 +117,16 @@ function RepertoirePanel({
                 <button
                   onClick={e => { e.stopPropagation(); onDeleteStudy(study.id) }}
                   title="Delete study"
-                  style={{ marginLeft: '4px', border: 'none', background: 'none', cursor: 'pointer', color: '#888', fontSize: '1rem', lineHeight: 1, flexShrink: 0, padding: '0 2px' }}
-                >×</button>
+                  style={{ marginLeft: '4px', border: 'none', background: 'none', cursor: 'pointer', color: '#888', lineHeight: 1, flexShrink: 0, padding: '0 2px', display: 'flex', alignItems: 'center' }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                    <path d="M10 11v6" />
+                    <path d="M14 11v6" />
+                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                  </svg>
+                </button>
               )}
             </div>
             <div style={{ height: '4px', background: '#1e1e1e', borderRadius: expanded ? '0' : '0 0 4px 4px', overflow: 'hidden' }}>
@@ -168,7 +171,19 @@ function RepertoirePanel({
                           </span>
                         )}
                         <span style={{ color: '#888', fontSize: '0.72rem', flexShrink: 0 }}>{chPct}%</span>
-                        {!selectionMode && <span style={{ color: '#4a7a4a', fontSize: '0.75rem', flexShrink: 0 }}>▶</span>}
+                        <button
+                          onClick={e => { e.stopPropagation(); onDeleteChapter(study.id, i) }}
+                          title="Delete chapter"
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#888', lineHeight: 1, flexShrink: 0, padding: '0 2px', display: 'flex', alignItems: 'center' }}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                            <path d="M10 11v6" />
+                            <path d="M14 11v6" />
+                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                          </svg>
+                        </button>
                       </div>
                       <div style={{ height: '3px', background: '#1a1a2a', borderRadius: '0 0 3px 3px', overflow: 'hidden' }}>
                         <div style={{ height: '100%', width: `${chPct}%`, background: chDue > 0 ? '#6a4a20' : '#2a5a2a' }} />
@@ -443,22 +458,6 @@ function App() {
     e.target.value = ''
   }
 
-  function startQuiz() {
-    if (selectedStudyId && selectedChapter) {
-      const cid = chapterId(selectedStudyId, chapters.indexOf(selectedChapter))
-      extractLines(selectedChapter).forEach(l => initScore(cid, l.lineId, l.displaySan))
-      setStatsKey(k => k + 1)
-    }
-    setQuizMode(true)
-    setQuizDone(false)
-    setQuizWrong(null)
-    setMoveIndex(-1)
-    setInlineDetour(null)
-    visitedDetourForksRef.current = new Set()
-    detourWrongCountRef.current = 0
-    mainlineWrongCountRef.current = new Map()
-  }
-
   function stopQuiz() {
     setQuizMode(false)
     setQuizWrong(null)
@@ -528,8 +527,20 @@ function App() {
   }
 
   function trainChapter(study: StoredStudy, chapterIndex: number) {
+    const ch = study.chapters[chapterIndex]
+    const cid = chapterId(study.id, chapterIndex)
+    extractLines(ch).forEach(l => initScore(cid, l.lineId, l.displaySan))
     loadChapters(study.chapters, study.playerColor, study.id)
-    setSelectedChapter(study.chapters[chapterIndex])
+    setSelectedChapter(ch)
+    setQuizMode(true)
+    setQuizDone(false)
+    setQuizWrong(null)
+    setMoveIndex(-1)
+    setInlineDetour(null)
+    visitedDetourForksRef.current = new Set()
+    detourWrongCountRef.current = 0
+    mainlineWrongCountRef.current = new Map()
+    setStatsKey(k => k + 1)
     setView('training')
   }
 
@@ -596,6 +607,7 @@ function App() {
               statsKey={statsKey}
               onTrainChapter={trainChapter}
               onDeleteStudy={id => setStoredStudies(deleteStudy(id))}
+              onDeleteChapter={(studyId, chapterIndex) => setStoredStudies(deleteChapter(studyId, chapterIndex))}
               selectionMode={selectionMode}
               selectedChapterIds={selectedChapterIds}
               onToggleChapter={toggleChapter}
@@ -740,32 +752,15 @@ function App() {
         >
           ← Home
         </button>
-        {chapters.length > 1 && (
-          <select
-            value={chapters.indexOf(selectedChapter!)}
-            onChange={e => {
-              setSelectedChapter(chapters[Number(e.target.value)])
-              e.target.blur()
-            }}
-            style={{ padding: '6px 10px', alignSelf: 'flex-start' }}
-          >
-            {chapters.map((ch, i) => (
-              <option key={i} value={i}>{ch.title}</option>
-            ))}
-          </select>
-        )}
-        {selectedChapter && (
-          <button
-            onClick={quizMode ? stopQuiz : startQuiz}
-            style={{
-              padding: '6px 20px', cursor: 'pointer', alignSelf: 'flex-start',
-              background: quizMode ? '#555' : '#4a7a4a', color: '#fff',
-              border: 'none', borderRadius: '4px', fontSize: '0.9rem',
-            }}
-          >
-            {quizMode ? '■ Stop' : '▶ Practice'}
-          </button>
-        )}
+        {selectedChapter && (() => {
+          const study = storedStudies.find(s => s.id === selectedStudyId)
+          return (
+            <div style={{ alignSelf: 'flex-start', display: 'flex', flexDirection: 'column', gap: '1px' }}>
+              {study && <span style={{ fontSize: '0.72rem', color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '340px' }}>{study.name}</span>}
+              <span style={{ fontSize: '0.88rem', color: '#bbb', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '340px' }}>{selectedChapter.title}</span>
+            </div>
+          )
+        })()}
         {selectedChapter && (
           <div style={{ fontSize: '0.9rem', color: '#555', minHeight: '1.2em' }}>
             {inlineDetour
@@ -841,10 +836,10 @@ function App() {
               onClick={() => setShowBranches(v => !v)}
               style={{ fontSize: '0.8rem', padding: '4px 10px', cursor: 'pointer', width: '100%', background: '#2b2b2b', color: '#ccc', border: '1px solid #444', borderRadius: '4px' }}
             >
-              {showBranches ? '▲' : '▼'} Branch classification ({branchForks.length} fork{branchForks.length !== 1 ? 's' : ''})
+              {showBranches ? '▲' : '▼'} See all variations in chapter
             </button>
             {showBranches && (
-              <div style={{ background: '#1e1e1e', border: '1px solid #444', borderTop: 'none', borderRadius: '0 0 4px 4px', padding: '8px', fontSize: '0.8rem', color: '#ccc' }}>
+              <div style={{ background: '#1e1e1e', border: '1px solid #fa8c8c', borderTop: 'none', borderRadius: '0 0 4px 4px', padding: '8px', fontSize: '0.8rem', color: '#ccc' }}>
                 {branchForks.map((fork, fi) => (
                   <div key={fi} style={{ marginBottom: '8px', paddingBottom: '8px', borderBottom: fi < branchForks.length - 1 ? '1px solid #333' : 'none' }}>
                     <span style={{ color: '#888' }}>

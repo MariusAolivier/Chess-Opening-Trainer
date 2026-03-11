@@ -121,6 +121,32 @@ export function deleteScoresForStudy(studyId: string): void {
 }
 
 /**
+ * Delete scores for a single chapter and re-index all subsequent chapters
+ * (chapter indices shift down by 1 after a deletion).
+ */
+export function deleteAndReindexChapter(studyId: string, deletedIndex: number): void {
+  const deletedCid = `${studyId}_${deletedIndex}`
+
+  let records = load().filter(r => r.chapterId !== deletedCid)
+  records = records.map(r => {
+    if (!r.chapterId.startsWith(studyId + '_')) return r
+    const idx = parseInt(r.chapterId.slice(studyId.length + 1), 10)
+    if (idx > deletedIndex) return { ...r, chapterId: `${studyId}_${idx - 1}` }
+    return r
+  })
+  save(records)
+
+  let mainlines = loadForkMainlines().filter(m => m.chapterId !== deletedCid)
+  mainlines = mainlines.map(m => {
+    if (!m.chapterId.startsWith(studyId + '_')) return m
+    const idx = parseInt(m.chapterId.slice(studyId.length + 1), 10)
+    if (idx > deletedIndex) return { ...m, chapterId: `${studyId}_${idx - 1}` }
+    return m
+  })
+  saveForkMainlines(mainlines)
+}
+
+/**
  * Remove stale score records for a chapter — those whose lineId is no longer
  * present in the current PGN (line was removed or its path changed).
  * Returns the number of records removed.
