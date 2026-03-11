@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
+import './App.css'
 import Chessboard from './components/Chessboard'
 import { parseStudy, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
 import { loadStudies, saveStudy, deleteStudy, type StoredStudy, chapterId } from './lib/storage'

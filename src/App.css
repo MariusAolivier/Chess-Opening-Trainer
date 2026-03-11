@@ -3,6 +3,11 @@
   min-height: 100vh;
 }
 
+/* Fix chessground file coordinate alignment — the default left:24px shifts a-h too far right */
+.cg-wrap coords.files {
+  left: 0 !important;
+}
+
 .logo {
   height: 6em;
   padding: 1.5em;

@@ -5,6 +5,7 @@ import type { Key } from '@lichess-org/chessground/types'
 import '@lichess-org/chessground/assets/chessground.base.css'
 import '@lichess-org/chessground/assets/chessground.brown.css'
 import '@lichess-org/chessground/assets/chessground.cburnett.css'
+import './chessboard-overrides.css'
 
 function getLegalDests(chess: Chess): Map<Key, Key[]> {
   const dests = new Map<Key, Key[]>()
