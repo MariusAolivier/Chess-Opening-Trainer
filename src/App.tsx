@@ -29,11 +29,19 @@ function RepertoirePanel({
   statsKey,
   onTrainChapter,
   onDeleteStudy,
+  selectionMode,
+  selectedChapterIds,
+  onToggleChapter,
+  onToggleStudy,
 }: {
   studies: StoredStudy[]
   statsKey: number
   onTrainChapter: (study: StoredStudy, chapterIndex: number) => void
   onDeleteStudy: (id: string) => void
+  selectionMode: boolean
+  selectedChapterIds: Set<string>
+  onToggleChapter: (cid: string) => void
+  onToggleStudy: (study: StoredStudy) => void
 }) {
   void statsKey
   const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set())
@@ -55,6 +63,13 @@ function RepertoirePanel({
     })
   }
 
+  // Auto-expand all studies when entering selection mode so chapters are visible
+  useEffect(() => {
+    if (selectionMode) {
+      setExpandedStudies(new Set(studies.map(s => s.id)))
+    }
+  }, [selectionMode, studies])
+
   return (
     <div style={{ width: '100%', maxWidth: '440px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
       {studies.map(study => {
@@ -70,6 +85,11 @@ function RepertoirePanel({
         })
         const pct = totalLines > 0 ? Math.round((startedLines / totalLines) * 100) : 0
 
+        const allChapterIds = study.chapters.map((_, i) => chapterId(study.id, i))
+        const selectedCount = allChapterIds.filter(id => selectedChapterIds.has(id)).length
+        const studyAllSelected = selectedCount === allChapterIds.length
+        const studySomeSelected = selectedCount > 0 && selectedCount < allChapterIds.length
+
         return (
           <div key={study.id}>
             <div
@@ -80,6 +100,16 @@ function RepertoirePanel({
                 background: '#2a2a3a', cursor: 'pointer', userSelect: 'none',
               }}
             >
+              {selectionMode && (
+                <input
+                  type="checkbox"
+                  ref={node => { if (node) node.indeterminate = studySomeSelected }}
+                  checked={studyAllSelected}
+                  onChange={() => onToggleStudy(study)}
+                  onClick={e => e.stopPropagation()}
+                  style={{ width: '15px', height: '15px', flexShrink: 0, cursor: 'pointer', accentColor: '#5a9a5a' }}
+                />
+              )}
               <span style={{ color: '#aaa', fontSize: '0.75rem', width: '10px' }}>{expanded ? '▼' : '▶'}</span>
               <span style={{ flex: 1, fontWeight: 'bold', color: '#e8e8e8', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{study.name}</span>
               {dueLines > 0 && (
@@ -88,11 +118,13 @@ function RepertoirePanel({
                 </span>
               )}
               <span style={{ color: '#888', fontSize: '0.78rem', flexShrink: 0 }}>{pct}%</span>
-              <button
-                onClick={e => { e.stopPropagation(); onDeleteStudy(study.id) }}
-                title="Delete study"
-                style={{ marginLeft: '4px', border: 'none', background: 'none', cursor: 'pointer', color: '#888', fontSize: '1rem', lineHeight: 1, flexShrink: 0, padding: '0 2px' }}
-              >×</button>
+              {!selectionMode && (
+                <button
+                  onClick={e => { e.stopPropagation(); onDeleteStudy(study.id) }}
+                  title="Delete study"
+                  style={{ marginLeft: '4px', border: 'none', background: 'none', cursor: 'pointer', color: '#888', fontSize: '1rem', lineHeight: 1, flexShrink: 0, padding: '0 2px' }}
+                >×</button>
+              )}
             </div>
             <div style={{ height: '4px', background: '#1e1e1e', borderRadius: expanded ? '0' : '0 0 4px 4px', overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${pct}%`, background: '#3a6a3a' }} />
@@ -107,18 +139,28 @@ function RepertoirePanel({
                   const chStarted = chLines.filter(l => chScores.some(s => s.lineId === l.lineId && s.interval > 0)).length
                   const chDue = chScores.filter(s => new Date(s.dueDate).getTime() <= now).length
                   const chPct = chTotal > 0 ? Math.round((chStarted / chTotal) * 100) : 0
+                  const chSelected = selectedChapterIds.has(cid)
                   return (
                     <div key={i}>
                       <div
-                        onClick={() => onTrainChapter(study, i)}
+                        onClick={() => selectionMode ? onToggleChapter(cid) : onTrainChapter(study, i)}
                         style={{
                           display: 'flex', alignItems: 'center', gap: '8px',
                           padding: '6px 10px', borderRadius: '4px 4px 0 0',
-                          background: '#252535', cursor: 'pointer',
+                          background: selectionMode && chSelected ? '#1e2e1e' : '#252535', cursor: 'pointer',
                         }}
-                        onMouseEnter={e => (e.currentTarget.style.background = '#2e2e48')}
-                        onMouseLeave={e => (e.currentTarget.style.background = '#252535')}
+                        onMouseEnter={e => (e.currentTarget.style.background = selectionMode && chSelected ? '#253525' : '#2e2e48')}
+                        onMouseLeave={e => (e.currentTarget.style.background = selectionMode && chSelected ? '#1e2e1e' : '#252535')}
                       >
+                        {selectionMode && (
+                          <input
+                            type="checkbox"
+                            checked={chSelected}
+                            onChange={() => onToggleChapter(cid)}
+                            onClick={e => e.stopPropagation()}
+                            style={{ width: '13px', height: '13px', flexShrink: 0, cursor: 'pointer', accentColor: '#5a9a5a' }}
+                          />
+                        )}
                         <span style={{ flex: 1, color: '#ccc', fontSize: '0.83rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ch.title}</span>
                         {chDue > 0 && (
                           <span style={{ background: '#7a3030', color: '#ffaaaa', fontSize: '0.65rem', padding: '1px 5px', borderRadius: '10px', flexShrink: 0 }}>
@@ -126,7 +168,7 @@ function RepertoirePanel({
                           </span>
                         )}
                         <span style={{ color: '#888', fontSize: '0.72rem', flexShrink: 0 }}>{chPct}%</span>
-                        <span style={{ color: '#4a7a4a', fontSize: '0.75rem', flexShrink: 0 }}>▶</span>
+                        {!selectionMode && <span style={{ color: '#4a7a4a', fontSize: '0.75rem', flexShrink: 0 }}>▶</span>}
                       </div>
                       <div style={{ height: '3px', background: '#1a1a2a', borderRadius: '0 0 3px 3px', overflow: 'hidden' }}>
                         <div style={{ height: '100%', width: `${chPct}%`, background: chDue > 0 ? '#6a4a20' : '#2a5a2a' }} />
@@ -169,6 +211,8 @@ function App() {
   const [showBranches, setShowBranches] = useState(false)
   const [conflictWarnings, setConflictWarnings] = useState<ConflictInfo[]>([])
   const [resetNotice, setResetNotice] = useState<string | null>(null)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
 
   // Flat mainline: [{fen, san, comment, alternatives}] following the first child at each node.
   // alternatives = sibling nodes that could have been played instead of this move.
@@ -432,6 +476,57 @@ function App() {
     trainChapter(study, chapterIndex)
   }
 
+  function trainFromSelection() {
+    if (selectedChapterIds.size === 0) return
+    const scores = loadScores()
+    const now = Date.now()
+
+    // Build a flat list of {study, chapterIndex} for all selected chapters
+    type Entry = { study: StoredStudy; chapterIndex: number }
+    const all: Entry[] = []
+    storedStudies.forEach(study => {
+      study.chapters.forEach((_, i) => {
+        if (selectedChapterIds.has(chapterId(study.id, i))) {
+          all.push({ study, chapterIndex: i })
+        }
+      })
+    })
+
+    // Prefer chapters that have at least one due line; fall back to any selected chapter
+    const due = all.filter(({ study, chapterIndex: i }) => {
+      const cid = chapterId(study.id, i)
+      return scores.some(s => s.chapterId === cid && new Date(s.dueDate).getTime() <= now)
+    })
+    const pool = due.length > 0 ? due : all
+    const { study, chapterIndex } = pool[Math.floor(Math.random() * pool.length)]
+
+    setSelectionMode(false)
+    setSelectedChapterIds(new Set())
+    trainChapter(study, chapterIndex)
+  }
+
+  function toggleChapter(cid: string) {
+    setSelectedChapterIds(prev => {
+      const next = new Set(prev)
+      next.has(cid) ? next.delete(cid) : next.add(cid)
+      return next
+    })
+  }
+
+  function toggleStudy(study: StoredStudy) {
+    const allIds = study.chapters.map((_, i) => chapterId(study.id, i))
+    const allSelected = allIds.every(id => selectedChapterIds.has(id))
+    setSelectedChapterIds(prev => {
+      const next = new Set(prev)
+      if (allSelected) {
+        allIds.forEach(id => next.delete(id))
+      } else {
+        allIds.forEach(id => next.add(id))
+      }
+      return next
+    })
+  }
+
   function trainChapter(study: StoredStudy, chapterIndex: number) {
     loadChapters(study.chapters, study.playerColor, study.id)
     setSelectedChapter(study.chapters[chapterIndex])
@@ -501,7 +596,47 @@ function App() {
               statsKey={statsKey}
               onTrainChapter={trainChapter}
               onDeleteStudy={id => setStoredStudies(deleteStudy(id))}
+              selectionMode={selectionMode}
+              selectedChapterIds={selectedChapterIds}
+              onToggleChapter={toggleChapter}
+              onToggleStudy={toggleStudy}
             />
+            {/* Chapter selection / training launch */}
+            {storedStudies.length > 0 && (
+              <div style={{ marginTop: '16px', width: '100%', maxWidth: '440px' }}>
+                {!selectionMode ? (
+                  <button
+                    onClick={() => setSelectionMode(true)}
+                    style={{ width: '100%', padding: '8px 16px', cursor: 'pointer', background: '#1e2e3e', color: '#7ab4e0', border: '1px solid #3a5a7a', borderRadius: '6px', fontSize: '0.88rem' }}
+                  >
+                    ☑ Select chapters to train
+                  </button>
+                ) : (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={() => { setSelectionMode(false); setSelectedChapterIds(new Set()) }}
+                      style={{ flex: 1, padding: '8px', cursor: 'pointer', background: '#2a2a3a', color: '#aaa', border: '1px solid #555', borderRadius: '6px', fontSize: '0.88rem' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={trainFromSelection}
+                      disabled={selectedChapterIds.size === 0}
+                      style={{
+                        flex: 2, padding: '8px', cursor: selectedChapterIds.size > 0 ? 'pointer' : 'not-allowed',
+                        background: selectedChapterIds.size > 0 ? '#2a5a2a' : '#222',
+                        color: selectedChapterIds.size > 0 ? '#aaffaa' : '#555',
+                        border: '1px solid', borderColor: selectedChapterIds.size > 0 ? '#4a8a4a' : '#333',
+                        borderRadius: '6px', fontSize: '0.88rem', fontWeight: 'bold',
+                        opacity: selectedChapterIds.size > 0 ? 1 : 0.5,
+                      }}
+                    >
+                      ▶ Start Training{selectedChapterIds.size > 0 ? ` (${selectedChapterIds.size})` : ''}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             {/* Upload section */}
             <div style={{ marginTop: '28px', paddingTop: '20px', borderTop: '1px solid #2e2e3e', width: '100%', maxWidth: '440px' }}>
               <div style={{ fontWeight: 'bold', color: '#aaa', fontSize: '0.85rem', marginBottom: '10px' }}>Upload study</div>
