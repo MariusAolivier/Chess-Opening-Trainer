@@ -67,7 +67,7 @@ function RepertoirePanel({
   }
 
   return (
-    <div style={{ width: '100%', maxWidth: '440px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+    <div style={{ width: '100%', maxWidth: '440px', display: 'flex', flexDirection: 'column', gap: '6px', boxSizing: 'border-box' }}>
       {studies.map(study => {
         const expanded = expandedStudies.has(study.id)
         let totalLines = 0, startedLines = 0, dueLines = 0
@@ -323,6 +323,11 @@ function App() {
     return scores.filter(s => new Date(s.dueDate).getTime() <= now).length
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsKey, storedStudies])
+
+  const estimatedMinutes = useMemo(() => {
+    // Heuristic: about 45 seconds per due line.
+    return Math.ceil((totalDue * 45) / 60)
+  }, [totalDue])
 
   const streak = useMemo(() => getReviewStreak(), [statsKey])
 
@@ -651,8 +656,8 @@ function App() {
     <>
       {view === 'repertoire' && (
         /* ── Repertoire full page ── */
-        <div style={{ position: 'fixed', inset: 0, background: '#1a1a2a', zIndex: 100, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-          <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '24px 16px 48px' }}>
+        <div style={{ position: 'fixed', inset: 0, background: '#1a1a2a', zIndex: 100, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
+          <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '20px 12px 40px', boxSizing: 'border-box', overflowX: 'hidden' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
               <button
                 onClick={() => setView('home')}
@@ -826,6 +831,10 @@ function App() {
               </div>
             )}
           </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', marginTop: '28px', textAlign: 'center' }}>
+            <h1 style={{ margin: 0, fontSize: '2rem', lineHeight: 1.05, color: '#f3efe6', fontWeight: 800 }}>Opening Trainer</h1>
+            <p style={{ margin: 0, fontSize: '0.95rem', color: '#9aa7bd' }}>Train your repertoire intelligently</p>
+          </div>
           {syncStatus === 'error' && (
             <div style={{ fontSize: '0.75rem', color: '#ff8888', background: '#2a1010', border: '1px solid #8a3030', borderRadius: '6px', padding: '6px 12px', maxWidth: '340px', wordBreak: 'break-word' }}>
               ✗ Sync error: {syncError}
@@ -837,6 +846,26 @@ function App() {
           {syncStatus === 'ok' && (
             <div style={{ fontSize: '0.75rem', color: '#5a9a5a' }}>✓ Synced</div>
           )}
+          <div style={{
+            width: '100%',
+            maxWidth: '340px',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+            gap: '8px',
+          }}>
+            <div style={{ padding: '4px 2px', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.68rem', color: '#fff' }}>Due today</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#888' }}>{totalDue}</div>
+            </div>
+            <div style={{ padding: '4px 2px', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.68rem', color: '#fff' }}>Repertoires</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#888' }}>{storedStudies.length}</div>
+            </div>
+            <div style={{ padding: '4px 2px', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.68rem', color: '#fff' }}>Estimated time</div>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: '#888' }}>{estimatedMinutes} min</div>
+            </div>
+          </div>
           <Chessboard fen={STARTING_FEN} readonly={true} />
           <button
             onClick={pickAndTrainNext}
@@ -849,7 +878,7 @@ function App() {
               opacity: storedStudies.length > 0 ? 1 : 0.5,
             }}
           >
-            ▶ Train Now{totalDue > 0 ? ` — ${totalDue} due today` : ''}
+            ▶ Train Now
           </button>
           {storedStudies.length === 0 ? (
             <button
