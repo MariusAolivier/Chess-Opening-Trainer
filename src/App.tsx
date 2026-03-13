@@ -3,8 +3,8 @@ import './App.css'
 import Chessboard from './components/Chessboard'
 import { parseStudy, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
 import { loadStudies, saveStudy, deleteStudy, deleteChapter, type StoredStudy, chapterId } from './lib/storage'
-import { loadScores, recordReview, initScore, type ScoreRecord, syncChapterLines, updateForkMainlines, findConflicts, type ConflictInfo } from './lib/scores'
-import { fetchAndMerge, uploadStudy, deleteStudyRemote, uploadScores, uploadForkMainlines, subscribeToScores } from './lib/sync'
+import { loadScores, recordReview, initScore, type ScoreRecord, syncChapterLines, updateForkMainlines, findConflicts, type ConflictInfo, getReviewStreak } from './lib/scores'
+import { fetchAndMerge, uploadStudy, deleteStudyRemote, uploadScores, uploadForkMainlines, uploadReviewActivity, subscribeToScores, subscribeToReviewActivity } from './lib/sync'
 import { Chess } from 'chess.js'
 
 type InlineDetour = {
@@ -230,8 +230,10 @@ function App() {
   const [resetNotice, setResetNotice] = useState<string | null>(null)
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
+  const [showStreakPanel, setShowStreakPanel] = useState(false)
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'ok' | 'error'>('idle')
   const [syncError, setSyncError] = useState<string | null>(null)
+  const streakPanelRef = useRef<HTMLDivElement>(null)
 
   // Sync with Firestore on mount, then subscribe to score changes from other devices
   useEffect(() => {
@@ -253,8 +255,27 @@ function App() {
     const unsub = subscribeToScores(() => {
       setStatsKey(k => k + 1)
     })
-    return unsub
+    const unsubReviewActivity = subscribeToReviewActivity(() => {
+      setStatsKey(k => k + 1)
+    })
+    return () => {
+      unsub()
+      unsubReviewActivity()
+    }
   }, [])
+
+  useEffect(() => {
+    if (!showStreakPanel) return
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!streakPanelRef.current?.contains(event.target as Node)) {
+        setShowStreakPanel(false)
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [showStreakPanel])
 
   // Flat mainline: [{fen, san, comment, alternatives}] following the first child at each node.
   // alternatives = sibling nodes that could have been played instead of this move.
@@ -302,6 +323,8 @@ function App() {
     return scores.filter(s => new Date(s.dueDate).getTime() <= now).length
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsKey, storedStudies])
+
+  const streak = useMemo(() => getReviewStreak(), [statsKey])
 
   // Reset position and quiz when chapter changes
   useEffect(() => {
@@ -351,6 +374,7 @@ function App() {
           // Display name = first move of the detour (the variation root)
           recordReview(chapterId(selectedStudyId, cidx), detourLeaf.fen, detourLine[0].san, quality)
           uploadScores()
+          uploadReviewActivity()
           setStatsKey(k => k + 1)
         }
         const t = setTimeout(() => {
@@ -424,6 +448,7 @@ function App() {
     const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
     recordReview(cid, leaf.fen, 'Main line', quality)
     uploadScores()
+    uploadReviewActivity()
     setStatsKey(k => k + 1)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quizDone])
@@ -752,7 +777,55 @@ function App() {
 
       {view === 'home' ? (
         /* ── Home view ── */
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', paddingBottom: '32px' }}>
+        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', paddingBottom: '32px', width: '100%', maxWidth: '400px' }}>
+          <div ref={streakPanelRef} style={{ position: 'absolute', top: '-8px', left: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px', zIndex: 30 }}>
+            <button
+              onClick={() => setShowStreakPanel(open => !open)}
+              aria-label="Toggle streak details"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 12px',
+                borderRadius: '999px',
+                border: '1px solid #5a4320',
+                background: '#2a2113',
+                color: '#ffd27a',
+                fontSize: '0.95rem',
+                fontWeight: 'bold',
+                boxShadow: '0 8px 18px rgba(0, 0, 0, 0.22)',
+              }}
+            >
+              <span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>🔥</span>
+              <span>{streak.current}</span>
+            </button>
+            {showStreakPanel && (
+              <div style={{
+                minWidth: '190px',
+                padding: '12px',
+                borderRadius: '12px',
+                background: '#202634',
+                border: '1px solid #2f3b54',
+                color: '#dbe6ff',
+                boxShadow: '0 14px 30px rgba(0, 0, 0, 0.28)',
+                position: 'relative',
+                zIndex: 31,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Current</span>
+                  <span style={{ fontWeight: 'bold', color: '#ffe28a' }}>{streak.current} day{streak.current === 1 ? '' : 's'}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Today</span>
+                  <span style={{ fontWeight: 'bold' }}>{streak.todayCount} review{streak.todayCount === 1 ? '' : 's'}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                  <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Best</span>
+                  <span style={{ fontWeight: 'bold' }}>{streak.best} day{streak.best === 1 ? '' : 's'}</span>
+                </div>
+              </div>
+            )}
+          </div>
           {syncStatus === 'error' && (
             <div style={{ fontSize: '0.75rem', color: '#ff8888', background: '#2a1010', border: '1px solid #8a3030', borderRadius: '6px', padding: '6px 12px', maxWidth: '340px', wordBreak: 'break-word' }}>
               ✗ Sync error: {syncError}

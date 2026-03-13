@@ -7,18 +7,21 @@ import type { Chapter } from './pgn'
 import type { StoredStudy } from './storage'
 import { loadStudies } from './storage'
 import type { ScoreRecord } from './scores'
-import { loadScores, importAllScores } from './scores'
+import { loadScores, importAllScores, loadReviewActivity, importReviewActivity } from './scores'
 import type { ForkMainlineRecord } from './scores'
 import { exportForkMainlines, importForkMainlines } from './scores'
+import type { ReviewActivityRecord } from './scores'
 
 // Firestore layout (no auth, single user):
 //   studies/{studyId}       — one document per study
 //   app/scores              — { records: ScoreRecord[] }
 //   app/forkMainlines       — { mainlines: ForkMainlineRecord[] }
+//   app/reviewActivity      — { records: ReviewActivityRecord[] }
 
 const studyDoc = (id: string) => doc(db, 'studies', id)
 const scoresDoc = doc(db, 'app', 'scores')
 const forkMainlinesDoc = doc(db, 'app', 'forkMainlines')
+const reviewActivityDoc = doc(db, 'app', 'reviewActivity')
 
 type FirestoreStudy = {
   id: string
@@ -82,6 +85,10 @@ export async function uploadForkMainlines(): Promise<void> {
   await setDoc(forkMainlinesDoc, { mainlines: exportForkMainlines() })
 }
 
+export async function uploadReviewActivity(): Promise<void> {
+  await setDoc(reviewActivityDoc, { records: loadReviewActivity() })
+}
+
 // ── Initial fetch & merge ────────────────────────────────────────────────────
 
 /**
@@ -91,10 +98,11 @@ export async function uploadForkMainlines(): Promise<void> {
  * Returns true if any data was fetched.
  */
 export async function fetchAndMerge(): Promise<boolean> {
-  const [studiesSnap, scoresSnap, forkSnap] = await Promise.all([
+  const [studiesSnap, scoresSnap, forkSnap, reviewActivitySnap] = await Promise.all([
     getDocs(collection(db, 'studies')),
     getDoc(scoresDoc),
     getDoc(forkMainlinesDoc),
+    getDoc(reviewActivityDoc),
   ])
 
   let changed = false
@@ -106,6 +114,7 @@ export async function fetchAndMerge(): Promise<boolean> {
       await Promise.all(local.map(s => uploadStudy(s)))
       await uploadScores()
       await uploadForkMainlines()
+      await uploadReviewActivity()
     }
   } else {
     // Merge remote studies into local (remote wins on id collision)
@@ -138,6 +147,19 @@ export async function fetchAndMerge(): Promise<boolean> {
     }
   }
 
+  if (!reviewActivitySnap.exists()) {
+    const localActivity = loadReviewActivity()
+    if (localActivity.length > 0) {
+      await uploadReviewActivity()
+    }
+  } else {
+    const remoteActivity = (reviewActivitySnap.data().records ?? []) as ReviewActivityRecord[]
+    if (remoteActivity.length > 0) {
+      importReviewActivity(remoteActivity)
+      changed = true
+    }
+  }
+
   return changed
 }
 
@@ -156,6 +178,17 @@ export function subscribeToScores(onChange: () => void): () => void {
     if (!snapshot.exists()) return
     const records = (snapshot.data().records ?? []) as ScoreRecord[]
     importAllScores(records)
+    onChange()
+  })
+}
+
+export function subscribeToReviewActivity(onChange: () => void): () => void {
+  let isFirst = true
+  return onSnapshot(reviewActivityDoc, snapshot => {
+    if (isFirst) { isFirst = false; return }
+    if (!snapshot.exists()) return
+    const records = (snapshot.data().records ?? []) as ReviewActivityRecord[]
+    importReviewActivity(records)
     onChange()
   })
 }

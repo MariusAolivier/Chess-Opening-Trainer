@@ -26,6 +26,12 @@ export interface ScoreRecord {
 }
 
 const KEY = 'chess-opening-trainer:scores'
+const REVIEW_ACTIVITY_KEY = 'chess-opening-trainer:review-activity'
+
+export interface ReviewActivityRecord {
+  day: string
+  count: number
+}
 
 function load(): ScoreRecord[] {
   try {
@@ -40,6 +46,38 @@ function load(): ScoreRecord[] {
 
 function save(records: ScoreRecord[]): void {
   localStorage.setItem(KEY, JSON.stringify(records))
+}
+
+function loadReviewActivityRaw(): ReviewActivityRecord[] {
+  try {
+    const raw = localStorage.getItem(REVIEW_ACTIVITY_KEY)
+    if (!raw) return []
+    return (JSON.parse(raw) as ReviewActivityRecord[]).filter(record => (
+      typeof record.day === 'string' &&
+      typeof record.count === 'number' &&
+      Number.isFinite(record.count) &&
+      record.count > 0
+    ))
+  } catch {
+    return []
+  }
+}
+
+function saveReviewActivity(records: ReviewActivityRecord[]): void {
+  localStorage.setItem(REVIEW_ACTIVITY_KEY, JSON.stringify(records))
+}
+
+function toDayKey(value: number): string {
+  const date = new Date(value)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function toDayNumber(dayKey: string): number {
+  const [year, month, day] = dayKey.split('-').map(Number)
+  return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000)
 }
 
 function makeId(chapterId: string, lineId: string): string {
@@ -109,7 +147,65 @@ export function recordReview(
     records.push(record)
   }
   save(records)
+  recordReviewActivity()
   return record
+}
+
+export function loadReviewActivity(): ReviewActivityRecord[] {
+  return loadReviewActivityRaw()
+}
+
+export function importReviewActivity(records: ReviewActivityRecord[]): void {
+  saveReviewActivity(records)
+}
+
+export function recordReviewActivity(at: number = Date.now()): void {
+  const day = toDayKey(at)
+  const records = loadReviewActivityRaw()
+  const existing = records.find(record => record.day === day)
+  if (existing) {
+    existing.count += 1
+  } else {
+    records.push({ day, count: 1 })
+    records.sort((left, right) => left.day.localeCompare(right.day))
+  }
+  saveReviewActivity(records)
+}
+
+export function getReviewStreak(now: number = Date.now()): { current: number; best: number; todayCount: number } {
+  const records = loadReviewActivityRaw().sort((left, right) => left.day.localeCompare(right.day))
+  if (records.length === 0) return { current: 0, best: 0, todayCount: 0 }
+
+  const dayNumbers = records.map(record => toDayNumber(record.day))
+  const todayKey = toDayKey(now)
+  const todayNumber = toDayNumber(todayKey)
+  const todayCount = records.find(record => record.day === todayKey)?.count ?? 0
+
+  let best = 1
+  let run = 1
+  for (let index = 1; index < dayNumbers.length; index += 1) {
+    if (dayNumbers[index] === dayNumbers[index - 1] + 1) {
+      run += 1
+    } else {
+      run = 1
+    }
+    if (run > best) best = run
+  }
+
+  const latestDayNumber = dayNumbers[dayNumbers.length - 1]
+  let current = 0
+  if (latestDayNumber >= todayNumber - 1) {
+    current = 1
+    for (let index = dayNumbers.length - 1; index > 0; index -= 1) {
+      if (dayNumbers[index] === dayNumbers[index - 1] + 1) {
+        current += 1
+      } else {
+        break
+      }
+    }
+  }
+
+  return { current, best, todayCount }
 }
 
 /** Delete all scores for a given study (e.g. when the study is deleted). */
