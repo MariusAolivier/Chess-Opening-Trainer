@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Chessground } from '@lichess-org/chessground'
 import { Chess } from 'chess.js'
 import type { Key } from '@lichess-org/chessground/types'
@@ -48,6 +48,13 @@ interface ChessboardProps {
 }
 
 export default function Chessboard({ fen, readonly = false, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
+  const [boardSize, setBoardSize] = useState(() => Math.min(400, window.innerWidth - 32))
+  useEffect(() => {
+    const onResize = () => setBoardSize(Math.min(400, window.innerWidth - 32))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   const boardRef = useRef<HTMLDivElement>(null)
   const groundRef = useRef<ReturnType<typeof Chessground> | null>(null)
   const onMoveRef = useRef(onMove)
@@ -57,7 +64,7 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
   const prevFenRef = useRef(fen)
   const prevResetKeyRef = useRef(resetKey)
 
-  // Init (or reinit) when interaction mode changes
+  // Init (or reinit) when interaction mode or board size changes
   useEffect(() => {
     if (!boardRef.current) return
     const chess = new Chess(fen ?? undefined)
@@ -118,7 +125,7 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
       ground.destroy()
       groundRef.current = null
     }
-  }, [readonly, playerColor, orientation]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [readonly, playerColor, orientation, boardSize]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update position + dests when fen or resetKey changes
   useEffect(() => {
@@ -158,6 +165,6 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
   }, [fen, resetKey, readonly, playerColor])
 
   return (
-    <div ref={boardRef} style={{ width: '400px', height: '400px' }} />
+    <div ref={boardRef} style={{ width: `${boardSize}px`, height: `${boardSize}px` }} />
   )
 }

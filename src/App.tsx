@@ -627,7 +627,7 @@ function App() {
       {view === 'repertoire' && (
         /* ── Repertoire full page ── */
         <div style={{ position: 'fixed', inset: 0, background: '#1a1a2a', zIndex: 100, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-          <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '24px 24px 48px' }}>
+          <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '24px 16px 48px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
               <button
                 onClick={() => setView('home')}
@@ -748,7 +748,7 @@ function App() {
           </div>
         </div>
       )}
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', boxSizing: 'border-box' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px', boxSizing: 'border-box' }}>
 
       {view === 'home' ? (
         /* ── Home view ── */
