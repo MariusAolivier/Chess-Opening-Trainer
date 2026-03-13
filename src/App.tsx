@@ -202,6 +202,36 @@ function RepertoirePanel({
 }
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+const QUIZ_START_USER_TURN = 3
+const HOME_FENS = [
+  'rnbqkbnr/pppp1ppp/4p3/8/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2', // French setup after 1.e4 e6 2.d4
+  'r1bqkbnr/pppp1ppp/2n5/4p3/3P4/5N2/PPP1PPPP/RNBQKB1R w KQkq - 2 3', // Classical center structure
+  'rnbqkb1r/pp1ppppp/5n2/2p5/4P3/2N5/PPPP1PPP/R1BQKBNR w KQkq - 2 3', // Sicilian sideline shape
+  'r1bqkbnr/pppp1ppp/2n5/4p3/1bPP4/5N2/PP2PPPP/RNBQKB1R w KQkq - 2 4', // Nimzo-style pressure
+]
+
+function findQuizStartMoveIndex(
+  chapter: Chapter,
+  line: Array<{ fen: string }>,
+  userColor: 'w' | 'b',
+  targetUserTurn = QUIZ_START_USER_TURN,
+): number {
+  let userTurnCount = 0
+
+  for (let moveToPlayIndex = 0; moveToPlayIndex < line.length; moveToPlayIndex++) {
+    const fenBeforeMove = moveToPlayIndex === 0 ? chapter.startFen : line[moveToPlayIndex - 1].fen
+    const sideToMove = fenBeforeMove.split(' ')[1] as 'w' | 'b'
+    if (sideToMove !== userColor) continue
+
+    userTurnCount += 1
+    if (userTurnCount === targetUserTurn) {
+      return moveToPlayIndex - 1
+    }
+  }
+
+  // Fallback for short lines that don't reach the requested turn.
+  return -1
+}
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -234,6 +264,7 @@ function App() {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'ok' | 'error'>('idle')
   const [syncError, setSyncError] = useState<string | null>(null)
   const streakPanelRef = useRef<HTMLDivElement>(null)
+  const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
 
   // Sync with Firestore on mount, then subscribe to score changes from other devices
   useEffect(() => {
@@ -342,6 +373,13 @@ function App() {
     detourWrongCountRef.current = 0
     mainlineWrongCountRef.current = new Map()
   }, [selectedChapter])
+
+  // Start quizzes from the position right before the user's 3rd move.
+  useEffect(() => {
+    if (!quizMode || !selectedChapter) return
+    setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
+    setBoardResetKey(k => k + 1)
+  }, [quizMode, selectedChapter, mainline, userColor])
 
   // Keyboard navigation (disabled in quiz mode)
   useEffect(() => {
@@ -866,7 +904,7 @@ function App() {
               <div style={{ fontSize: '1rem', fontWeight: 700, color: '#888' }}>{estimatedMinutes} min</div>
             </div>
           </div>
-          <Chessboard fen={STARTING_FEN} readonly={true} />
+          <Chessboard fen={homeFen} readonly={true} />
           <button
             onClick={pickAndTrainNext}
             disabled={storedStudies.length === 0}
