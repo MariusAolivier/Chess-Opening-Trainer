@@ -15,6 +15,13 @@ type InlineDetour = {
   detourIndex: number  // -1 = at fork position before any detour move is played
 }
 
+type ConfirmDialogState = {
+  title: string
+  message: string
+  confirmLabel?: string
+  action: () => void
+}
+
 function flattenDetour(root: MoveNode): Array<{ fen: string; san: string; comment?: string }> {
   const line: Array<{ fen: string; san: string; comment?: string }> = []
   let node: MoveNode | undefined = root
@@ -201,6 +208,84 @@ function RepertoirePanel({
   )
 }
 
+function ConfirmDialog({
+  state,
+  onCancel,
+  onConfirm,
+}: {
+  state: ConfirmDialogState | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  if (!state) return null
+
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.6)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '16px',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: '360px',
+          background: '#1f2030',
+          border: '1px solid #3a3f58',
+          borderRadius: '10px',
+          padding: '16px',
+          boxSizing: 'border-box',
+          color: '#d8deef',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+        }}
+      >
+        <div style={{ fontSize: '1rem', fontWeight: 'bold' }}>{state.title}</div>
+        <div style={{ fontSize: '0.9rem', color: '#b3bdd7', lineHeight: 1.45 }}>{state.message}</div>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '7px 14px',
+              borderRadius: '6px',
+              border: '1px solid #58607c',
+              background: '#2c3348',
+              color: '#d4def7',
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            style={{
+              padding: '7px 14px',
+              borderRadius: '6px',
+              border: '1px solid #8f3a3a',
+              background: '#5a2424',
+              color: '#ffd0d0',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+            }}
+          >
+            {state.confirmLabel ?? 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const QUIZ_START_USER_TURN = 3
 const HOME_FENS = [
@@ -263,6 +348,7 @@ function App() {
   const [showStreakPanel, setShowStreakPanel] = useState(false)
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'ok' | 'error'>('idle')
   const [syncError, setSyncError] = useState<string | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
   const streakPanelRef = useRef<HTMLDivElement>(null)
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
 
@@ -576,6 +662,43 @@ function App() {
     mainlineWrongCountRef.current = new Map()
   }
 
+  function requestDeleteStudy(id: string) {
+    const study = storedStudies.find(s => s.id === id)
+    const studyName = study?.name ?? 'this study'
+    setConfirmDialog({
+      title: 'Delete study?',
+      message: `This will permanently delete "${studyName}" and all its chapters.`,
+      confirmLabel: 'Delete study',
+      action: () => {
+        setStoredStudies(deleteStudy(id))
+        deleteStudyRemote(id)
+        uploadScores()
+        uploadForkMainlines()
+      },
+    })
+  }
+
+  function requestDeleteChapter(studyId: string, chapterIndex: number) {
+    const study = storedStudies.find(s => s.id === studyId)
+    const chapter = study?.chapters[chapterIndex]
+    const chapterName = chapter?.title ?? 'this chapter'
+    const studyName = study?.name ?? 'this study'
+    setConfirmDialog({
+      title: 'Delete chapter?',
+      message: `This will permanently delete "${chapterName}" from "${studyName}".`,
+      confirmLabel: 'Delete chapter',
+      action: () => {
+        const updated = deleteChapter(studyId, chapterIndex)
+        setStoredStudies(updated)
+        const updatedStudy = updated.find(s => s.id === studyId)
+        if (updatedStudy) uploadStudy(updatedStudy)
+        else deleteStudyRemote(studyId)
+        uploadScores()
+        uploadForkMainlines()
+      },
+    })
+  }
+
   function pickAndTrainNext() {
     if (storedStudies.length === 0) return
     const scores = loadScores()
@@ -712,21 +835,8 @@ function App() {
               studies={storedStudies}
               statsKey={statsKey}
               onTrainChapter={trainChapter}
-              onDeleteStudy={id => {
-                setStoredStudies(deleteStudy(id))
-                deleteStudyRemote(id)
-                uploadScores()
-                uploadForkMainlines()
-              }}
-              onDeleteChapter={(studyId, chapterIndex) => {
-                const updated = deleteChapter(studyId, chapterIndex)
-                setStoredStudies(updated)
-                const updatedStudy = updated.find(s => s.id === studyId)
-                if (updatedStudy) uploadStudy(updatedStudy)
-                else deleteStudyRemote(studyId)
-                uploadScores()
-                uploadForkMainlines()
-              }}
+              onDeleteStudy={requestDeleteStudy}
+              onDeleteChapter={requestDeleteChapter}
               selectionMode={selectionMode}
               selectedChapterIds={selectedChapterIds}
               onToggleChapter={toggleChapter}
@@ -1088,6 +1198,15 @@ function App() {
       </div>
       )}
     </div>
+    <ConfirmDialog
+      state={confirmDialog}
+      onCancel={() => setConfirmDialog(null)}
+      onConfirm={() => {
+        if (!confirmDialog) return
+        confirmDialog.action()
+        setConfirmDialog(null)
+      }}
+    />
     </>
   )
 }
