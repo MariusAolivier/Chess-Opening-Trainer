@@ -81,6 +81,25 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
 }
 
 /**
+ * Removes variation branches that only contain a single ply (one move by one side).
+ * Branches with 2+ plies are kept (e.g. one move for White and one for Black).
+ * Mainline moves (index 0 in each sibling list) are always kept.
+ */
+function pruneSingleMoveBranches(nodes: MoveNode[]): MoveNode[] {
+  if (nodes.length === 0) return []
+
+  return nodes.flatMap((node, index) => {
+    const prunedChildren = pruneSingleMoveBranches(node.children)
+    const prunedNode: MoveNode = { ...node, children: prunedChildren }
+
+    if (index === 0) return [prunedNode]
+
+    const branchDepthInPlies = 1 + lineDepth(prunedChildren)
+    return branchDepthInPlies <= 1 ? [] : [prunedNode]
+  })
+}
+
+/**
  * Returns all leaf lines in a chapter — one entry per end-to-end path through the tree.
  * The lineId is the leaf node's FEN (unique per line); lastMoveSan is for display.
  * This covers the mainline, every inline detour, and every independent variation.
@@ -148,7 +167,7 @@ export function parseStudy(pgn: string): { name: string | null; chapters: Chapte
       title,
       startFen,
       startComment: game.gameComment?.comment,
-      moves: buildLine(startFen, game.moves as PgnMove[], chess),
+      moves: pruneSingleMoveBranches(buildLine(startFen, game.moves as PgnMove[], chess)),
     }
   })
 
