@@ -3,6 +3,7 @@ import {
   collection, doc, getDoc, getDocs,
   setDoc, deleteDoc, onSnapshot,
 } from 'firebase/firestore'
+import type { Chapter } from './pgn'
 import type { StoredStudy } from './storage'
 import { loadStudies } from './storage'
 import type { ScoreRecord } from './scores'
@@ -19,10 +20,54 @@ const studyDoc = (id: string) => doc(db, 'studies', id)
 const scoresDoc = doc(db, 'app', 'scores')
 const forkMainlinesDoc = doc(db, 'app', 'forkMainlines')
 
+type FirestoreStudy = {
+  id: string
+  name: string
+  playerColor: 'white' | 'black'
+  // New format: flattened to avoid Firestore nested-depth limits.
+  chaptersJson?: string
+  // Legacy format kept for backward compatibility.
+  chapters?: Chapter[]
+}
+
+function encodeStudy(study: StoredStudy): FirestoreStudy {
+  return {
+    id: study.id,
+    name: study.name,
+    playerColor: study.playerColor,
+    chaptersJson: JSON.stringify(study.chapters),
+  }
+}
+
+function decodeStudy(data: FirestoreStudy): StoredStudy | null {
+  if (typeof data.id !== 'string' || typeof data.name !== 'string') return null
+  const playerColor = (data.playerColor ?? 'white') as 'white' | 'black'
+
+  if (typeof data.chaptersJson === 'string') {
+    try {
+      const chapters = JSON.parse(data.chaptersJson) as Chapter[]
+      return { id: data.id, name: data.name, playerColor, chapters }
+    } catch {
+      return null
+    }
+  }
+
+  if (Array.isArray(data.chapters)) {
+    return {
+      id: data.id,
+      name: data.name,
+      playerColor,
+      chapters: data.chapters,
+    }
+  }
+
+  return null
+}
+
 // ── Uploads ─────────────────────────────────────────────────────────────────
 
 export async function uploadStudy(study: StoredStudy): Promise<void> {
-  await setDoc(studyDoc(study.id), study)
+  await setDoc(studyDoc(study.id), encodeStudy(study))
 }
 
 export async function deleteStudyRemote(studyId: string): Promise<void> {
@@ -64,7 +109,9 @@ export async function fetchAndMerge(): Promise<boolean> {
     }
   } else {
     // Merge remote studies into local (remote wins on id collision)
-    const remoteStudies = studiesSnap.docs.map(d => d.data() as StoredStudy)
+    const remoteStudies = studiesSnap.docs
+      .map(d => decodeStudy(d.data() as FirestoreStudy))
+      .filter((s): s is StoredStudy => s !== null)
     const local = loadStudies()
     const localById = new Map(local.map(s => [s.id, s]))
     remoteStudies.forEach(rs => localById.set(rs.id, rs))
