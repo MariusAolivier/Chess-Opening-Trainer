@@ -54,8 +54,16 @@ export async function fetchAndMerge(): Promise<boolean> {
 
   let changed = false
 
-  // Merge studies
-  if (!studiesSnap.empty) {
+  if (studiesSnap.empty) {
+    // Firestore has no studies yet — seed it from whatever is in localStorage
+    const local = loadStudies()
+    if (local.length > 0) {
+      await Promise.all(local.map(s => uploadStudy(s)))
+      await uploadScores()
+      await uploadForkMainlines()
+    }
+  } else {
+    // Merge remote studies into local (remote wins on id collision)
     const remoteStudies = studiesSnap.docs.map(d => d.data() as StoredStudy)
     const local = loadStudies()
     const localById = new Map(local.map(s => [s.id, s]))
