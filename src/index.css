@@ -1,5 +1,5 @@
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
 
@@ -31,6 +31,14 @@ body {
   width: 100%;
   min-height: 100vh;
   overflow-x: hidden;
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: #8f704a; }
+::-webkit-scrollbar-thumb { background: #3a3a5a; border-radius: 3px; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 

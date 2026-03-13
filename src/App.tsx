@@ -819,14 +819,68 @@ function App() {
         /* ── Repertoire full page ── */
         <div style={{ position: 'fixed', inset: 0, background: '#1a1a2a', zIndex: 100, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
           <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '20px 12px 40px', boxSizing: 'border-box', overflowX: 'hidden' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '24px' }}>
               <button
                 onClick={() => setView('home')}
                 style={{ background: 'none', border: '1px solid #555', color: '#aaa', cursor: 'pointer', borderRadius: '4px', padding: '4px 12px', fontSize: '0.85rem', flexShrink: 0 }}
               >
                 ← Home
               </button>
-              <h2 style={{ margin: 0, color: '#e8e8e8', fontSize: '1.2rem', fontWeight: 'bold' }}>My Repertoire</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h2 style={{ margin: 0, color: '#e8e8e8', fontSize: '1.2rem', fontWeight: 'bold' }}>My Repertoire</h2>
+                <div ref={streakPanelRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <button
+                    onClick={() => setShowStreakPanel(open => !open)}
+                    aria-label="Toggle streak details"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: 0,
+                      border: 'none',
+                      background: 'none',
+                      color: '#ffd27a',
+                      fontSize: '0.95rem',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>🔥</span>
+                    <span>{streak.current}</span>
+                  </button>
+                  {showStreakPanel && (
+                    <div style={{
+                      minWidth: '190px',
+                      padding: '12px',
+                      borderRadius: '12px',
+                      background: 'rgba(20, 24, 40, 0.75)',
+                      backdropFilter: 'blur(12px)',
+                      WebkitBackdropFilter: 'blur(12px)',
+                      border: '1px solid rgba(60, 80, 130, 0.45)',
+                      color: '#dbe6ff',
+                      boxShadow: '0 14px 30px rgba(0, 0, 0, 0.4)',
+                      position: 'absolute',
+                      top: 'calc(100% + 8px)',
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      zIndex: 31,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Current</span>
+                        <span style={{ fontWeight: 'bold', color: '#ffe28a' }}>{streak.current} day{streak.current === 1 ? '' : 's'}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Today</span>
+                        <span style={{ fontWeight: 'bold' }}>{streak.todayCount} review{streak.todayCount === 1 ? '' : 's'}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                        <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Best</span>
+                        <span style={{ fontWeight: 'bold' }}>{streak.best} day{streak.best === 1 ? '' : 's'}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
             {storedStudies.length === 0 && (
               <p style={{ color: '#888', fontSize: '0.9rem', marginBottom: '16px' }}>No studies yet. Upload a PGN to get started.</p>
@@ -931,54 +985,6 @@ function App() {
       {view === 'home' ? (
         /* ── Home view ── */
         <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', paddingBottom: '32px', width: '100%', maxWidth: '400px' }}>
-          <div ref={streakPanelRef} style={{ position: 'absolute', top: '-8px', left: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px', zIndex: 30 }}>
-            <button
-              onClick={() => setShowStreakPanel(open => !open)}
-              aria-label="Toggle streak details"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 12px',
-                borderRadius: '999px',
-                border: '1px solid #5a4320',
-                background: '#2a2113',
-                color: '#ffd27a',
-                fontSize: '0.95rem',
-                fontWeight: 'bold',
-                boxShadow: '0 8px 18px rgba(0, 0, 0, 0.22)',
-              }}
-            >
-              <span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>🔥</span>
-              <span>{streak.current}</span>
-            </button>
-            {showStreakPanel && (
-              <div style={{
-                minWidth: '190px',
-                padding: '12px',
-                borderRadius: '12px',
-                background: '#202634',
-                border: '1px solid #2f3b54',
-                color: '#dbe6ff',
-                boxShadow: '0 14px 30px rgba(0, 0, 0, 0.28)',
-                position: 'relative',
-                zIndex: 31,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Current</span>
-                  <span style={{ fontWeight: 'bold', color: '#ffe28a' }}>{streak.current} day{streak.current === 1 ? '' : 's'}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Today</span>
-                  <span style={{ fontWeight: 'bold' }}>{streak.todayCount} review{streak.todayCount === 1 ? '' : 's'}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                  <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Best</span>
-                  <span style={{ fontWeight: 'bold' }}>{streak.best} day{streak.best === 1 ? '' : 's'}</span>
-                </div>
-              </div>
-            )}
-          </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', marginTop: '28px', textAlign: 'center' }}>
             <h1 style={{ margin: 0, fontSize: '2rem', lineHeight: 1.05, color: '#f3efe6', fontWeight: 800 }}>Opening Trainer</h1>
             <p style={{ margin: 0, fontSize: '0.95rem', color: '#9aa7bd' }}>Train your repertoire intelligently</p>
@@ -989,7 +995,15 @@ function App() {
             </div>
           )}
           {syncStatus === 'syncing' && (
-            <div style={{ fontSize: '0.75rem', color: '#aaa' }}>⟳ Syncing…</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: '#aaa' }}>
+              <span style={{
+                width: '10px', height: '10px', borderRadius: '50%',
+                border: '2px solid #555', borderTopColor: '#aaa',
+                display: 'inline-block',
+                animation: 'spin 0.7s linear infinite',
+              }} />
+              Syncing…
+            </div>
           )}
           {syncStatus === 'ok' && (
             <div style={{ fontSize: '0.75rem', color: '#5a9a5a' }}>✓ Synced</div>
