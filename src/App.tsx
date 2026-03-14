@@ -633,6 +633,13 @@ function App() {
     }
   }
 
+  function handleRepertoireGoHome() {
+    setError(null)
+    setResetNotice(null)
+    setConflictWarnings([])
+    setView('home')
+  }
+
   return (
     <>
       {view === 'repertoire' && (
@@ -646,7 +653,7 @@ function App() {
           error={error}
           resetNotice={resetNotice}
           conflictWarnings={conflictWarnings}
-          onGoHome={() => setView('home')}
+          onGoHome={handleRepertoireGoHome}
           onTrainChapter={trainChapter}
           onDeleteStudy={requestDeleteStudy}
           onDeleteChapter={requestDeleteChapter}

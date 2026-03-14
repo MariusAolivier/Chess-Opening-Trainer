@@ -192,7 +192,7 @@ export function parseStudy(pgn: string): { name: string | null; chapters: Chapte
 
   const chapters = games.map(game => {
     const tags = game.tags as Record<string, string> | undefined
-    const title = tags?.Event ?? 'Untitled'
+    const title = tags?.ChapterName ?? tags?.Event ?? 'Untitled'
     const startFen = tags?.FEN ?? START_FEN
 
     chess.load(startFen)
