@@ -98,9 +98,17 @@ function App() {
     mainlineWrongCountRef.current = new Map()
   }
 
-  function persistReviewData() {
-    uploadScores()
-    uploadReviewActivity()
+  async function persistReviewData() {
+    try {
+      await Promise.all([uploadScores(), uploadReviewActivity()])
+      setSyncStatus('ok')
+      setSyncError(null)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[sync] persistReviewData failed:', err)
+      setSyncStatus('error')
+      setSyncError(message)
+    }
     setStatsKey(key => key + 1)
   }
 
@@ -128,7 +136,7 @@ function App() {
     const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((acc, value) => acc + value, 0)
     const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
     recordReview(chapterId(selectedStudyId, chapters, chapterIndex), leaf.fen, 'Main line', quality)
-    persistReviewData()
+    void persistReviewData()
   }
 
   function handleSoundToggle() {
@@ -282,7 +290,7 @@ function App() {
           const chapterIndex = chapters.indexOf(selectedChapter)
           const detourLeaf = detourLine[detourLine.length - 1]
           recordReview(chapterId(selectedStudyId, chapters, chapterIndex), detourLeaf.fen, detourLine[0].san, quality)
-          persistReviewData()
+          void persistReviewData()
         }
 
         const timeout = setTimeout(() => {
@@ -414,9 +422,17 @@ function App() {
         setConflictWarnings(findConflicts(allChaptersMap))
         setStoredStudies(allStudies)
 
-        uploadStudy(stored)
-        uploadScores()
-        uploadForkMainlines()
+        Promise.all([uploadStudy(stored), uploadScores(), uploadForkMainlines()])
+          .then(() => {
+            setSyncStatus('ok')
+            setSyncError(null)
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err)
+            console.error('[sync] upload failed after PGN import:', err)
+            setSyncStatus('error')
+            setSyncError(message)
+          })
         loadChapters(stored.chapters, uploadColor, stored.id)
       } catch {
         setError('Failed to parse PGN file.')
@@ -437,9 +453,17 @@ function App() {
       confirmLabel: 'Delete study',
       action: () => {
         setStoredStudies(deleteStudy(id))
-        deleteStudyRemote(id)
-        uploadScores()
-        uploadForkMainlines()
+        Promise.all([deleteStudyRemote(id), uploadScores(), uploadForkMainlines()])
+          .then(() => {
+            setSyncStatus('ok')
+            setSyncError(null)
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err)
+            console.error('[sync] delete study sync failed:', err)
+            setSyncStatus('error')
+            setSyncError(message)
+          })
       },
     })
   }
@@ -459,11 +483,18 @@ function App() {
         setStoredStudies(updated)
 
         const updatedStudy = updated.find(item => item.id === studyId)
-        if (updatedStudy) uploadStudy(updatedStudy)
-        else deleteStudyRemote(studyId)
-
-        uploadScores()
-        uploadForkMainlines()
+        const studyOp = updatedStudy ? uploadStudy(updatedStudy) : deleteStudyRemote(studyId)
+        Promise.all([studyOp, uploadScores(), uploadForkMainlines()])
+          .then(() => {
+            setSyncStatus('ok')
+            setSyncError(null)
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err)
+            console.error('[sync] delete chapter sync failed:', err)
+            setSyncStatus('error')
+            setSyncError(message)
+          })
       },
     })
   }
