@@ -5,9 +5,9 @@ import {
 } from 'firebase/firestore'
 import type { Chapter } from './pgn'
 import type { StoredStudy } from './storage'
-import { loadStudies } from './storage'
+import { loadStudies, buildChapterIds } from './storage'
 import type { ScoreRecord } from './scores'
-import { loadScores, importAllScores, loadReviewActivity, importReviewActivity } from './scores'
+import { loadScores, importAllScores, loadReviewActivity, importReviewActivity, remapChapterIds } from './scores'
 import type { ForkMainlineRecord } from './scores'
 import { exportForkMainlines, importForkMainlines } from './scores'
 import type { ReviewActivityRecord } from './scores'
@@ -67,6 +67,65 @@ function decodeStudy(data: FirestoreStudy): StoredStudy | null {
   return null
 }
 
+function studyNameKey(study: StoredStudy): string {
+  return study.name
+}
+
+function parseStudyTimestamp(studyId: string): number | null {
+  if (!/^\d+$/.test(studyId)) return null
+  const value = Number(studyId)
+  return Number.isFinite(value) ? value : null
+}
+
+function pickPreferredStudy(left: StoredStudy, right: StoredStudy): StoredStudy {
+  const leftTs = parseStudyTimestamp(left.id)
+  const rightTs = parseStudyTimestamp(right.id)
+  if (leftTs !== null && rightTs !== null) {
+    return rightTs >= leftTs ? right : left
+  }
+  if (right.chapters.length !== left.chapters.length) {
+    return right.chapters.length >= left.chapters.length ? right : left
+  }
+  return right.id >= left.id ? right : left
+}
+
+function buildChapterIdRemap(studiesById: Map<string, StoredStudy>, studyIdRemap: Map<string, string>): Map<string, string> {
+  const chapterRemap = new Map<string, string>()
+
+  studyIdRemap.forEach((toStudyId, fromStudyId) => {
+    if (fromStudyId === toStudyId) return
+    const fromStudy = studiesById.get(fromStudyId)
+    const toStudy = studiesById.get(toStudyId)
+    if (!fromStudy || !toStudy) return
+
+    const fromIds = buildChapterIds(fromStudy.id, fromStudy.chapters)
+    const toIds = buildChapterIds(toStudy.id, toStudy.chapters)
+
+    const toBySuffix = new Map<string, string>()
+    toIds.forEach(id => {
+      const splitIndex = id.indexOf('::')
+      if (splitIndex < 0) return
+      toBySuffix.set(id.slice(splitIndex + 2), id)
+    })
+
+    fromIds.forEach((fromId, index) => {
+      const splitIndex = fromId.indexOf('::')
+      if (splitIndex >= 0) {
+        const suffix = fromId.slice(splitIndex + 2)
+        const target = toBySuffix.get(suffix)
+        if (target) chapterRemap.set(fromId, target)
+      }
+      const legacyId = `${fromStudy.id}_${index}`
+      const fallbackTarget = toIds[index]
+      if (fallbackTarget) {
+        chapterRemap.set(legacyId, fallbackTarget)
+      }
+    })
+  })
+
+  return chapterRemap
+}
+
 // ── Uploads ─────────────────────────────────────────────────────────────────
 
 export async function uploadStudy(study: StoredStudy): Promise<void> {
@@ -117,15 +176,41 @@ export async function fetchAndMerge(): Promise<boolean> {
       await uploadReviewActivity()
     }
   } else {
-    // Merge remote studies into local (remote wins on id collision)
+    // Merge studies by name to prevent duplicate repertoires across devices.
     const remoteStudies = studiesSnap.docs
       .map(d => decodeStudy(d.data() as FirestoreStudy))
       .filter((s): s is StoredStudy => s !== null)
     const local = loadStudies()
-    const localById = new Map(local.map(s => [s.id, s]))
-    remoteStudies.forEach(rs => localById.set(rs.id, rs))
-    const merged = [...localById.values()]
+    const studiesById = new Map<string, StoredStudy>()
+    local.forEach(study => studiesById.set(study.id, study))
+    remoteStudies.forEach(study => studiesById.set(study.id, study))
+
+    const byName = new Map<string, StoredStudy>()
+    const studyIdRemap = new Map<string, string>()
+
+    ;[...local, ...remoteStudies].forEach(study => {
+      const key = studyNameKey(study)
+      const existing = byName.get(key)
+      if (!existing) {
+        byName.set(key, study)
+        return
+      }
+
+      const winner = pickPreferredStudy(existing, study)
+      const loser = winner.id === existing.id ? study : existing
+      byName.set(key, winner)
+      studyIdRemap.set(loser.id, winner.id)
+    })
+
+    const merged = [...byName.values()]
+    merged.forEach(study => studiesById.set(study.id, study))
     localStorage.setItem('chess-opening-trainer:studies', JSON.stringify(merged))
+
+    const chapterRemap = buildChapterIdRemap(studiesById, studyIdRemap)
+    if (chapterRemap.size > 0 && remapChapterIds(chapterRemap)) {
+      changed = true
+    }
+
     changed = true
   }
 
