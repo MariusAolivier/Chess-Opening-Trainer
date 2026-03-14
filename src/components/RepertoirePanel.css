@@ -145,9 +145,24 @@
 }
 
 .rp-chapter-title {
-  flex: 1;
   color: #ccc;
   font-size: 0.83rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-chapter-labels {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rp-chapter-last-reviewed {
+  color: #7d89ab;
+  font-size: 0.68rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

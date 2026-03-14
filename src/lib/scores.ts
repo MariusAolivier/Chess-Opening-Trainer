@@ -23,6 +23,8 @@ export interface ScoreRecord {
   interval: number
   /** ISO date string of the next due date */
   dueDate: string
+  /** ISO date string of the most recent review time */
+  lastReviewedAt?: string
 }
 
 const KEY = 'chess-opening-trainer:scores'
@@ -117,6 +119,7 @@ export function recordReview(
   displaySan: string,
   quality: 0 | 1 | 2 | 3 | 4 | 5
 ): ScoreRecord {
+  const reviewedAt = new Date().toISOString()
   const records = load()
   const idx = records.findIndex(r => r.chapterId === chapterId && r.lineId === lineId)
 
@@ -139,7 +142,15 @@ export function recordReview(
   }
 
   const dueDate = new Date(Date.now() + interval * 86_400_000).toISOString()
-  const record: ScoreRecord = { chapterId, lineId, displaySan: resolvedDisplaySan, ease, interval, dueDate }
+  const record: ScoreRecord = {
+    chapterId,
+    lineId,
+    displaySan: resolvedDisplaySan,
+    ease,
+    interval,
+    dueDate,
+    lastReviewedAt: reviewedAt,
+  }
 
   if (idx >= 0) {
     records[idx] = record

@@ -4,6 +4,38 @@ import { loadScores, type ScoreRecord } from '../lib/scores'
 import { chapterId, type StoredStudy } from '../lib/storage'
 import './RepertoirePanel.css'
 
+function reviewedAtTimestamp(score: ScoreRecord): number | null {
+  if (typeof score.lastReviewedAt === 'string') {
+    const parsed = Date.parse(score.lastReviewedAt)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+
+  if (score.interval > 0) {
+    const due = Date.parse(score.dueDate)
+    if (!Number.isNaN(due)) {
+      return due - score.interval * 86_400_000
+    }
+  }
+
+  return null
+}
+
+function formatLastReviewed(scores: ScoreRecord[]): string {
+  const latest = scores.reduce<number | null>((max, score) => {
+    const reviewedAt = reviewedAtTimestamp(score)
+    if (reviewedAt === null) return max
+    if (max === null || reviewedAt > max) return reviewedAt
+    return max
+  }, null)
+
+  if (latest === null) return 'Never'
+  return new Date(latest).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
 interface RepertoirePanelProps {
   studies: StoredStudy[]
   onTrainChapter: (study: StoredStudy, chapterIndex: number) => void
@@ -126,6 +158,7 @@ export default function RepertoirePanel({
                   const chapterDue = chapterScores.filter(score => new Date(score.dueDate).getTime() <= now).length
                   const chapterPercent = chapterTotalMoves > 0 ? Math.round((chapterCompletedMoves / chapterTotalMoves) * 100) : 0
                   const chapterSelected = selectedChapterIds.has(cid)
+                  const chapterLastReviewed = formatLastReviewed(chapterScores)
 
                   return (
                     <div key={chapterIndex} className="rp-chapter-shell">
@@ -142,7 +175,10 @@ export default function RepertoirePanel({
                             className="rp-chapter-checkbox"
                           />
                         )}
-                        <span className="rp-chapter-title">{chapter.title}</span>
+                        <span className="rp-chapter-labels">
+                          <span className="rp-chapter-title">{chapter.title}</span>
+                          <span className="rp-chapter-last-reviewed">Last reviewed: {chapterLastReviewed}</span>
+                        </span>
                         {chapterDue > 0 && (
                           <span className="rp-chapter-due">
                             {chapterDue} due
