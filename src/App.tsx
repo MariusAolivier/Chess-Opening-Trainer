@@ -32,6 +32,19 @@ function flattenDetour(root: MoveNode): Array<{ fen: string; san: string; commen
   return line
 }
 
+function nextPlayableDetourIndex(
+  detourLine: Array<{ fen: string }>,
+  detourIndex: number,
+  currentFen: string,
+): number {
+  let next = detourIndex + 1
+  // Some PGNs can yield comment/no-op sideline nodes (same FEN). Skip them.
+  while (next < detourLine.length && detourLine[next]?.fen === currentFen) {
+    next += 1
+  }
+  return next
+}
+
 function RepertoirePanel({
   studies,
   statsKey,
@@ -515,7 +528,7 @@ function App() {
       const { detourLine, detourIndex, forkFen, pendingInlines, forkMainlineIndex } = inlineDetour
       const detourFen = detourIndex === -1 ? forkFen : detourLine[detourIndex]?.fen
       if (!detourFen) return
-      const nextDetourIndex = detourIndex + 1
+      const nextDetourIndex = nextPlayableDetourIndex(detourLine, detourIndex, detourFen)
 
       if (nextDetourIndex >= detourLine.length) {
         // End of this detour – record score, pause, then move to next inline or return to mainline
@@ -801,7 +814,7 @@ function App() {
       const { detourLine, detourIndex, forkFen } = inlineDetour
       const fen = detourIndex === -1 ? forkFen : detourLine[detourIndex]?.fen
       if (!fen) return false
-      const nextDetourIndex = detourIndex + 1
+      const nextDetourIndex = nextPlayableDetourIndex(detourLine, detourIndex, fen)
       if (nextDetourIndex >= detourLine.length) return false
       const expected = detourLine[nextDetourIndex]
       const chess = new Chess(fen)
@@ -1060,7 +1073,7 @@ function App() {
           </div>
         </div>
       )}
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px', boxSizing: 'border-box' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: view === 'training' ? 'flex-start' : 'center', padding: '16px', boxSizing: 'border-box' }}>
 
       {view === 'home' ? (
         /* ── Home view ── */
@@ -1246,15 +1259,25 @@ function App() {
             : moveIndex === -1
               ? selectedChapter.startComment
               : mainline[moveIndex]?.comment
-          return comment ? (
+          if (!comment) return null
+          return (
             <div style={{
-              maxWidth: '400px', padding: '8px 12px', borderRadius: '6px',
-              background: '#f0ede4', color: '#444', fontSize: '0.875rem',
-              fontStyle: 'italic', lineHeight: '1.5',
+              maxWidth: '400px',
+              width: '100%',
+              maxHeight: '120px',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              boxSizing: 'border-box',
+              overflowY: 'auto',
+              background: '#f0ede4',
+              color: '#444',
+              fontSize: '0.875rem',
+              fontStyle: 'italic',
+              lineHeight: '1.5',
             }}>
               {comment}
             </div>
-          ) : null
+          )
         })()
         }
         {selectedChapter && branchForks.length > 0 && (
