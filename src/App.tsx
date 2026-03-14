@@ -374,8 +374,14 @@ function App() {
         const pgn = loaded.target?.result as string
         const { name: parsedName, chapters: parsedChapters } = parseStudy(pgn)
         const studyName = parsedName ?? file.name.replace(/\.pgn$/i, '')
+        const existingStudy = storedStudies.find(study => study.name === studyName)
+        const previousSnapshot = existingStudy
+          ? JSON.stringify({ playerColor: existingStudy.playerColor, chapters: existingStudy.chapters })
+          : null
         const stored = saveStudy(studyName, uploadColor, parsedChapters)
         migrateLegacyChapterIdsForStudies([stored])
+        const currentSnapshot = JSON.stringify({ playerColor: stored.playerColor, chapters: stored.chapters })
+        const structureChanged = previousSnapshot === null || previousSnapshot !== currentSnapshot
 
         let totalReset = 0
         totalReset += pruneStudyChapterIds(stored.id, new Set(buildChapterIds(stored.id, stored.chapters)))
@@ -386,7 +392,16 @@ function App() {
           updateForkMainlines(cid, extractForkMoves(chapter))
         })
 
-        setResetNotice(totalReset > 0 ? `${totalReset} score record${totalReset > 1 ? 's' : ''} reset (line removed or changed)` : null)
+        if (!existingStudy) {
+          setResetNotice(`Uploaded "${studyName}" with ${stored.chapters.length} chapter${stored.chapters.length === 1 ? '' : 's'}.`)
+        } else if (!structureChanged && totalReset === 0) {
+          setResetNotice(`Uploaded "${studyName}". No changes were detected.`)
+        } else {
+          const resetSummary = totalReset > 0
+            ? `${totalReset} score record${totalReset === 1 ? '' : 's'} removed because lines or chapters no longer exist.`
+            : 'No score records needed cleanup.'
+          setResetNotice(`Updated "${studyName}". ${resetSummary}`)
+        }
 
         const allStudies = loadStudies()
         const allChaptersMap = new Map<string, string>()
