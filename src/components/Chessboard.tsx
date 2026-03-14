@@ -38,6 +38,7 @@ interface ChessboardProps {
   fen?: string
   readonly?: boolean
   soundEnabled?: boolean
+  className?: string
   /** Quiz mode: the color the user controls */
   playerColor?: 'white' | 'black'
   /** Board orientation (defaults to white at bottom) */
@@ -48,7 +49,7 @@ interface ChessboardProps {
   resetKey?: number
 }
 
-export default function Chessboard({ fen, readonly = false, soundEnabled = true, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
+export default function Chessboard({ fen, readonly = false, soundEnabled = true, className, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
   const [boardSize, setBoardSize] = useState(() => Math.min(400, window.innerWidth - 32))
   useEffect(() => {
     const onResize = () => setBoardSize(Math.min(400, window.innerWidth - 32))
@@ -168,6 +169,8 @@ export default function Chessboard({ fen, readonly = false, soundEnabled = true,
   }, [fen, resetKey, readonly, playerColor])
 
   return (
-    <div ref={boardRef} style={{ width: `${boardSize}px`, height: `${boardSize}px` }} />
+    <div className={className}>
+      <div ref={boardRef} style={{ width: `${boardSize}px`, height: `${boardSize}px` }} />
+    </div>
   )
 }

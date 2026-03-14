@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import Chessboard from '../Chessboard'
 import type { Chapter, MoveNode } from '../../lib/pgn'
 import type { StoredStudy } from '../../lib/storage'
@@ -18,6 +19,7 @@ interface TrainingViewProps {
   quizMode: boolean
   quizDone: boolean
   quizWrong: string | null
+  wrongGuessTick: number
   revealedAnswer: boolean
   inlineDetour: InlineDetour | null
   moveIndex: number
@@ -41,6 +43,7 @@ export default function TrainingView({
   quizMode,
   quizDone,
   quizWrong,
+  wrongGuessTick,
   revealedAnswer,
   inlineDetour,
   moveIndex,
@@ -56,8 +59,20 @@ export default function TrainingView({
   onToggleBranches,
   onRevealAnswer,
 }: TrainingViewProps) {
+  const [isBoardShaking, setIsBoardShaking] = useState(false)
   const study = storedStudies.find(item => item.id === selectedStudyId)
   const userColor = activePlayerColor === 'white' ? 'w' : 'b'
+
+  useEffect(() => {
+    if (wrongGuessTick === 0) return
+
+    setIsBoardShaking(true)
+    const timeout = window.setTimeout(() => {
+      setIsBoardShaking(false)
+    }, 420)
+
+    return () => window.clearTimeout(timeout)
+  }, [wrongGuessTick])
 
   function countMovesForSide(
     startFen: string,
@@ -160,6 +175,7 @@ export default function TrainingView({
         orientation={activePlayerColor}
         onMove={quizMode ? onMove : undefined}
         resetKey={boardResetKey}
+        className={isBoardShaking ? 'tv-board-shake' : undefined}
       />
 
       <div className="tv-feedback">

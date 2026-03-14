@@ -66,6 +66,7 @@ function App() {
   const [quizMode, setQuizMode] = useState(false)
   const [quizDone, setQuizDone] = useState(false)
   const [quizWrong, setQuizWrong] = useState<string | null>(null)
+  const [wrongGuessTick, setWrongGuessTick] = useState(0)
   const [revealedAnswer, setRevealedAnswer] = useState(false)
   const [inlineDetour, setInlineDetour] = useState<InlineDetour | null>(null)
   const [boardResetKey, setBoardResetKey] = useState(0)
@@ -90,6 +91,7 @@ function App() {
     setMoveIndex(-1)
     setQuizDone(false)
     setQuizWrong(null)
+    setWrongGuessTick(0)
     setRevealedAnswer(false)
     setInlineDetour(null)
     setShowBranches(false)
@@ -592,6 +594,7 @@ function App() {
 
       detourWrongCountRef.current += 1
       setQuizWrong(expected.san)
+      setWrongGuessTick(tick => tick + 1)
       setRevealedAnswer(false)
       return false
     }
@@ -615,6 +618,7 @@ function App() {
 
     mainlineWrongCountRef.current.set(nextIndex, (mainlineWrongCountRef.current.get(nextIndex) ?? 0) + 1)
     setQuizWrong(mainline[nextIndex].san)
+    setWrongGuessTick(tick => tick + 1)
     setRevealedAnswer(false)
     return false
   }
@@ -686,6 +690,7 @@ function App() {
             quizMode={quizMode}
             quizDone={quizDone}
             quizWrong={quizWrong}
+            wrongGuessTick={wrongGuessTick}
             revealedAnswer={revealedAnswer}
             inlineDetour={inlineDetour}
             moveIndex={moveIndex}
