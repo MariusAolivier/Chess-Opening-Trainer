@@ -132,8 +132,20 @@ export async function uploadStudy(study: StoredStudy): Promise<void> {
   await setDoc(studyDoc(study.id), encodeStudy(study))
 }
 
-export async function deleteStudyRemote(studyId: string): Promise<void> {
-  await deleteDoc(studyDoc(studyId))
+export async function deleteStudyRemote(studyId: string, studyName?: string): Promise<void> {
+  const idsToDelete = new Set<string>([studyId])
+
+  if (studyName) {
+    const studiesSnap = await getDocs(collection(db, 'studies'))
+    studiesSnap.docs.forEach(snapshot => {
+      const data = snapshot.data() as FirestoreStudy
+      if (data.name === studyName) {
+        idsToDelete.add(snapshot.id)
+      }
+    })
+  }
+
+  await Promise.all([...idsToDelete].map(id => deleteDoc(studyDoc(id))))
 }
 
 export async function uploadScores(): Promise<void> {
@@ -152,7 +164,7 @@ export async function uploadReviewActivity(): Promise<void> {
 
 /**
  * Pull all data from Firestore and merge into localStorage.
- * Studies: union by id (Firestore wins on conflict — same id = same study).
+ * Studies: Firestore is authoritative when it has data.
  * Scores: Firestore wins entirely (last-write-wins across devices).
  * Returns true if any data was fetched.
  */
@@ -176,19 +188,18 @@ export async function fetchAndMerge(): Promise<boolean> {
       await uploadReviewActivity()
     }
   } else {
-    // Merge studies by name to prevent duplicate repertoires across devices.
+    // Firestore is the source of truth. Deduplicate same-name studies remotely,
+    // then mirror the result into localStorage so deletions propagate to devices.
     const remoteStudies = studiesSnap.docs
       .map(d => decodeStudy(d.data() as FirestoreStudy))
       .filter((s): s is StoredStudy => s !== null)
-    const local = loadStudies()
     const studiesById = new Map<string, StoredStudy>()
-    local.forEach(study => studiesById.set(study.id, study))
     remoteStudies.forEach(study => studiesById.set(study.id, study))
 
     const byName = new Map<string, StoredStudy>()
     const studyIdRemap = new Map<string, string>()
 
-    ;[...local, ...remoteStudies].forEach(study => {
+    remoteStudies.forEach(study => {
       const key = studyNameKey(study)
       const existing = byName.get(key)
       if (!existing) {
@@ -205,6 +216,13 @@ export async function fetchAndMerge(): Promise<boolean> {
     const merged = [...byName.values()]
     merged.forEach(study => studiesById.set(study.id, study))
     localStorage.setItem('chess-opening-trainer:studies', JSON.stringify(merged))
+
+    const duplicateRemoteIds = [...studyIdRemap.entries()]
+      .filter(([fromStudyId, toStudyId]) => fromStudyId !== toStudyId)
+      .map(([fromStudyId]) => fromStudyId)
+    if (duplicateRemoteIds.length > 0) {
+      await Promise.all(duplicateRemoteIds.map(id => deleteDoc(studyDoc(id))))
+    }
 
     const chapterRemap = buildChapterIdRemap(studiesById, studyIdRemap)
     if (chapterRemap.size > 0 && remapChapterIds(chapterRemap)) {

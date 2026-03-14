@@ -455,7 +455,7 @@ function App() {
       confirmLabel: 'Delete study',
       action: () => {
         setStoredStudies(deleteStudy(id))
-        Promise.all([deleteStudyRemote(id), uploadScores(), uploadForkMainlines()])
+        Promise.all([deleteStudyRemote(id, study?.name), uploadScores(), uploadForkMainlines()])
           .then(() => {
             setSyncStatus('ok')
             setSyncError(null)
@@ -485,7 +485,7 @@ function App() {
         setStoredStudies(updated)
 
         const updatedStudy = updated.find(item => item.id === studyId)
-        const studyOp = updatedStudy ? uploadStudy(updatedStudy) : deleteStudyRemote(studyId)
+        const studyOp = updatedStudy ? uploadStudy(updatedStudy) : deleteStudyRemote(studyId, study?.name)
         Promise.all([studyOp, uploadScores(), uploadForkMainlines()])
           .then(() => {
             setSyncStatus('ok')
