@@ -1,0 +1,188 @@
+.rp-root {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+}
+
+.rp-study-shell {
+  width: 100%;
+}
+
+.rp-study-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: #2a2a3a;
+  cursor: pointer;
+  user-select: none;
+}
+
+.rp-study-header-expanded {
+  border-radius: 6px 6px 0 0;
+}
+
+.rp-study-header-collapsed {
+  border-radius: 6px;
+}
+
+.rp-study-checkbox {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: #5a9a5a;
+}
+
+.rp-expand-icon {
+  color: #aaa;
+  font-size: 0.75rem;
+  width: 10px;
+}
+
+.rp-study-name {
+  flex: 1;
+  font-weight: bold;
+  color: #e8e8e8;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-due-badge {
+  background: #7a3030;
+  color: #ffaaaa;
+  font-size: 0.68rem;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.rp-percent {
+  color: #888;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+
+.rp-trash-btn {
+  margin-left: 4px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #888;
+  line-height: 1;
+  flex-shrink: 0;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+}
+
+.rp-progress-wrap {
+  height: 4px;
+  background: #1e1e1e;
+  overflow: hidden;
+}
+
+.rp-progress-wrap-expanded {
+  border-radius: 0;
+}
+
+.rp-progress-wrap-collapsed {
+  border-radius: 0 0 4px 4px;
+}
+
+.rp-progress-fill {
+  height: 100%;
+  background: #3a6a3a;
+}
+
+.rp-chapters-wrap {
+  background: #1e1e2e;
+  border-radius: 0 0 6px 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rp-chapter-shell {
+  width: 100%;
+}
+
+.rp-chapter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 4px 4px 0 0;
+  background: #252535;
+  cursor: pointer;
+}
+
+.rp-chapter-row:hover {
+  background: #2e2e48;
+}
+
+.rp-chapter-row-selected {
+  background: #1e2e1e;
+}
+
+.rp-chapter-row-selected:hover {
+  background: #253525;
+}
+
+.rp-chapter-checkbox {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: #5a9a5a;
+}
+
+.rp-chapter-title {
+  flex: 1;
+  color: #ccc;
+  font-size: 0.83rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-chapter-due {
+  background: #7a3030;
+  color: #ffaaaa;
+  font-size: 0.65rem;
+  padding: 1px 5px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.rp-chapter-percent {
+  color: #888;
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+
+.rp-chapter-progress-wrap {
+  height: 3px;
+  background: #1a1a2a;
+  border-radius: 0 0 3px 3px;
+  overflow: hidden;
+}
+
+.rp-chapter-progress-fill {
+  height: 100%;
+}
+
+.rp-chapter-progress-fill-due {
+  background: #6a4a20;
+}
+
+.rp-chapter-progress-fill-ok {
+  background: #2a5a2a;
+}

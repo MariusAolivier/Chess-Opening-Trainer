@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { extractLines } from '../lib/pgn'
 import { loadScores, type ScoreRecord } from '../lib/scores'
 import { chapterId, type StoredStudy } from '../lib/storage'
+import './RepertoirePanel.css'
 
 interface RepertoirePanelProps {
   studies: StoredStudy[]
@@ -44,7 +45,7 @@ export default function RepertoirePanel({
   }
 
   return (
-    <div style={{ width: '100%', maxWidth: '440px', display: 'flex', flexDirection: 'column', gap: '6px', boxSizing: 'border-box' }}>
+    <div className="rp-root">
       {studies.map(study => {
         const expanded = expandedStudies.has(study.id)
         let totalLines = 0
@@ -68,19 +69,10 @@ export default function RepertoirePanel({
         const studySomeSelected = selectedCount > 0 && selectedCount < allChapterIds.length
 
         return (
-          <div key={study.id}>
+          <div key={study.id} className="rp-study-shell">
             <div
               onClick={() => toggleExpandedStudy(study.id)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '9px 12px',
-                borderRadius: expanded ? '6px 6px 0 0' : '6px',
-                background: '#2a2a3a',
-                cursor: 'pointer',
-                userSelect: 'none',
-              }}
+              className={`rp-study-header ${expanded ? 'rp-study-header-expanded' : 'rp-study-header-collapsed'}`}
             >
               {selectionMode && (
                 <input
@@ -89,22 +81,22 @@ export default function RepertoirePanel({
                   checked={studyAllSelected}
                   onChange={() => onToggleStudy(study)}
                   onClick={event => event.stopPropagation()}
-                  style={{ width: '15px', height: '15px', flexShrink: 0, cursor: 'pointer', accentColor: '#5a9a5a' }}
+                  className="rp-study-checkbox"
                 />
               )}
-              <span style={{ color: '#aaa', fontSize: '0.75rem', width: '10px' }}>{expanded ? '▼' : '▶'}</span>
-              <span style={{ flex: 1, fontWeight: 'bold', color: '#e8e8e8', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{study.name}</span>
+              <span className="rp-expand-icon">{expanded ? '▼' : '▶'}</span>
+              <span className="rp-study-name">{study.name}</span>
               {dueLines > 0 && (
-                <span style={{ background: '#7a3030', color: '#ffaaaa', fontSize: '0.68rem', padding: '2px 7px', borderRadius: '10px', fontWeight: 'bold', flexShrink: 0 }}>
+                <span className="rp-due-badge">
                   {dueLines} due
                 </span>
               )}
-              <span style={{ color: '#888', fontSize: '0.78rem', flexShrink: 0 }}>{progressPercent}%</span>
+              <span className="rp-percent">{progressPercent}%</span>
               {!selectionMode && (
                 <button
                   onClick={event => { event.stopPropagation(); onDeleteStudy(study.id) }}
                   title="Delete study"
-                  style={{ marginLeft: '4px', border: 'none', background: 'none', cursor: 'pointer', color: '#888', lineHeight: 1, flexShrink: 0, padding: '0 2px', display: 'flex', alignItems: 'center' }}
+                  className="rp-trash-btn"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="3 6 5 6 21 6" />
@@ -116,11 +108,11 @@ export default function RepertoirePanel({
                 </button>
               )}
             </div>
-            <div style={{ height: '4px', background: '#1e1e1e', borderRadius: expanded ? '0' : '0 0 4px 4px', overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${progressPercent}%`, background: '#3a6a3a' }} />
+            <div className={`rp-progress-wrap ${expanded ? 'rp-progress-wrap-expanded' : 'rp-progress-wrap-collapsed'}`}>
+              <div className="rp-progress-fill" style={{ width: `${progressPercent}%` }} />
             </div>
             {expanded && (
-              <div style={{ background: '#1e1e2e', borderRadius: '0 0 6px 6px', padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div className="rp-chapters-wrap">
                 {study.chapters.map((chapter, chapterIndex) => {
                   const cid = chapterId(study.id, chapterIndex)
                   const chapterLines = extractLines(chapter)
@@ -132,20 +124,10 @@ export default function RepertoirePanel({
                   const chapterSelected = selectedChapterIds.has(cid)
 
                   return (
-                    <div key={chapterIndex}>
+                    <div key={chapterIndex} className="rp-chapter-shell">
                       <div
                         onClick={() => selectionMode ? onToggleChapter(cid) : onTrainChapter(study, chapterIndex)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          padding: '6px 10px',
-                          borderRadius: '4px 4px 0 0',
-                          background: selectionMode && chapterSelected ? '#1e2e1e' : '#252535',
-                          cursor: 'pointer',
-                        }}
-                        onMouseEnter={event => (event.currentTarget.style.background = selectionMode && chapterSelected ? '#253525' : '#2e2e48')}
-                        onMouseLeave={event => (event.currentTarget.style.background = selectionMode && chapterSelected ? '#1e2e1e' : '#252535')}
+                        className={`rp-chapter-row ${selectionMode && chapterSelected ? 'rp-chapter-row-selected' : ''}`}
                       >
                         {selectionMode && (
                           <input
@@ -153,20 +135,20 @@ export default function RepertoirePanel({
                             checked={chapterSelected}
                             onChange={() => onToggleChapter(cid)}
                             onClick={event => event.stopPropagation()}
-                            style={{ width: '13px', height: '13px', flexShrink: 0, cursor: 'pointer', accentColor: '#5a9a5a' }}
+                            className="rp-chapter-checkbox"
                           />
                         )}
-                        <span style={{ flex: 1, color: '#ccc', fontSize: '0.83rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chapter.title}</span>
+                        <span className="rp-chapter-title">{chapter.title}</span>
                         {chapterDue > 0 && (
-                          <span style={{ background: '#7a3030', color: '#ffaaaa', fontSize: '0.65rem', padding: '1px 5px', borderRadius: '10px', flexShrink: 0 }}>
+                          <span className="rp-chapter-due">
                             {chapterDue} due
                           </span>
                         )}
-                        <span style={{ color: '#888', fontSize: '0.72rem', flexShrink: 0 }}>{chapterPercent}%</span>
+                        <span className="rp-chapter-percent">{chapterPercent}%</span>
                         <button
                           onClick={event => { event.stopPropagation(); onDeleteChapter(study.id, chapterIndex) }}
                           title="Delete chapter"
-                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#888', lineHeight: 1, flexShrink: 0, padding: '0 2px', display: 'flex', alignItems: 'center' }}
+                          className="rp-trash-btn"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <polyline points="3 6 5 6 21 6" />
@@ -177,8 +159,11 @@ export default function RepertoirePanel({
                           </svg>
                         </button>
                       </div>
-                      <div style={{ height: '3px', background: '#1a1a2a', borderRadius: '0 0 3px 3px', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${chapterPercent}%`, background: chapterDue > 0 ? '#6a4a20' : '#2a5a2a' }} />
+                      <div className="rp-chapter-progress-wrap">
+                        <div
+                          className={`rp-chapter-progress-fill ${chapterDue > 0 ? 'rp-chapter-progress-fill-due' : 'rp-chapter-progress-fill-ok'}`}
+                          style={{ width: `${chapterPercent}%` }}
+                        />
                       </div>
                     </div>
                   )

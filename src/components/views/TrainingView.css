@@ -1,0 +1,194 @@
+.tv-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.tv-home-btn {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid #555;
+  color: #aaa;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 0.85rem;
+}
+
+.tv-chapter-meta {
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tv-study-name {
+  font-size: 0.72rem;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 340px;
+}
+
+.tv-chapter-name {
+  font-size: 0.88rem;
+  color: #bbb;
+  font-weight: bold;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 340px;
+}
+
+.tv-move-info {
+  font-size: 0.9rem;
+  color: #555;
+  min-height: 1.2em;
+}
+
+.tv-inline-label {
+  color: #f0c040;
+}
+
+.tv-inline-san {
+  margin-left: 6px;
+}
+
+.tv-progress-count {
+  margin-left: 8px;
+  color: #aaa;
+}
+
+.tv-branch-dots {
+  margin-left: 6px;
+  font-size: 0.75rem;
+}
+
+.tv-inline-dot {
+  color: #f0c040;
+}
+
+.tv-indep-dot {
+  color: #60adf0;
+}
+
+.tv-indep-dot-with-inline {
+  margin-left: 3px;
+}
+
+.tv-feedback {
+  max-width: 400px;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  text-align: center;
+  font-size: 0.9rem;
+  min-height: 36px;
+}
+
+.tv-line-complete {
+  color: #5c5;
+  font-weight: bold;
+}
+
+.tv-wrong-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.tv-wrong {
+  color: #e55;
+}
+
+.tv-reveal-btn {
+  padding: 4px 16px;
+  cursor: pointer;
+  background: #3a2020;
+  color: #ffaaaa;
+  border: 1px solid #7a3030;
+  border-radius: 4px;
+  font-size: 0.82rem;
+}
+
+.tv-comment {
+  max-width: 400px;
+  width: 100%;
+  max-height: 120px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  background: #f0ede4;
+  color: #444;
+  font-size: 0.875rem;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.tv-variations-root {
+  max-width: 400px;
+  width: 100%;
+}
+
+.tv-variations-toggle {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  cursor: pointer;
+  width: 100%;
+  background: #2b2b2b;
+  color: #ccc;
+  border: 1px solid #444;
+  border-radius: 4px;
+}
+
+.tv-variations-list {
+  background: #1e1e1e;
+  border: 1px solid #fa8c8c;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  padding: 8px;
+  font-size: 0.8rem;
+  color: #ccc;
+}
+
+.tv-variation-item {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+.tv-variation-item-divider {
+  border-bottom: 1px solid #333;
+}
+
+.tv-move-prefix {
+  color: #888;
+}
+
+.tv-main-san {
+  color: #fff;
+}
+
+.tv-mainline-label {
+  color: #888;
+}
+
+.tv-alt-line {
+  margin-top: 3px;
+  padding-left: 12px;
+}
+
+.tv-alt-dot-inline {
+  color: #f0c040;
+}
+
+.tv-alt-dot-independent {
+  color: #60adf0;
+}
+
+.tv-alt-type {
+  color: #888;
+}

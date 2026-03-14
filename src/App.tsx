@@ -582,7 +582,7 @@ function App() {
         />
       )}
 
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: view === 'training' ? 'flex-start' : 'center', padding: '16px', boxSizing: 'border-box' }}>
+      <div className={`app-main ${view === 'training' ? 'app-main-training' : 'app-main-home'}`}>
         {view === 'home' ? (
           <HomeView
             syncStatus={syncStatus}

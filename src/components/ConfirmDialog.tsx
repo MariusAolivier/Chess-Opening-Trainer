@@ -1,3 +1,5 @@
+import './ConfirmDialog.css'
+
 export type ConfirmDialogState = {
   title: string
   message: string
@@ -15,64 +17,15 @@ export default function ConfirmDialog({ state, onCancel, onConfirm }: ConfirmDia
   if (!state) return null
 
   return (
-    <div
-      onClick={onCancel}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0, 0, 0, 0.6)',
-        zIndex: 1000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '16px',
-        boxSizing: 'border-box',
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          width: '100%',
-          maxWidth: '360px',
-          background: '#1f2030',
-          border: '1px solid #3a3f58',
-          borderRadius: '10px',
-          padding: '16px',
-          boxSizing: 'border-box',
-          color: '#d8deef',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '12px',
-        }}
-      >
-        <div style={{ fontSize: '1rem', fontWeight: 'bold' }}>{state.title}</div>
-        <div style={{ fontSize: '0.9rem', color: '#b3bdd7', lineHeight: 1.45 }}>{state.message}</div>
-        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-          <button
-            onClick={onCancel}
-            style={{
-              padding: '7px 14px',
-              borderRadius: '6px',
-              border: '1px solid #58607c',
-              background: '#2c3348',
-              color: '#d4def7',
-              cursor: 'pointer',
-            }}
-          >
+    <div onClick={onCancel} className="confirm-overlay">
+      <div onClick={e => e.stopPropagation()} className="confirm-card">
+        <div className="confirm-title">{state.title}</div>
+        <div className="confirm-message">{state.message}</div>
+        <div className="confirm-actions">
+          <button onClick={onCancel} className="confirm-cancel-btn">
             Cancel
           </button>
-          <button
-            onClick={onConfirm}
-            style={{
-              padding: '7px 14px',
-              borderRadius: '6px',
-              border: '1px solid #8f3a3a',
-              background: '#5a2424',
-              color: '#ffd0d0',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-            }}
-          >
+          <button onClick={onConfirm} className="confirm-delete-btn">
             {state.confirmLabel ?? 'Delete'}
           </button>
         </div>

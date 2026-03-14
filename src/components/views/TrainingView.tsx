@@ -2,6 +2,7 @@ import Chessboard from '../Chessboard'
 import type { Chapter, MoveNode } from '../../lib/pgn'
 import type { StoredStudy } from '../../lib/storage'
 import type { InlineDetour, MainlineMove } from '../../lib/training'
+import './TrainingView.css'
 
 interface BranchFork {
   moveNumber: number
@@ -58,30 +59,27 @@ export default function TrainingView({
   const study = storedStudies.find(item => item.id === selectedStudyId)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-      <button
-        onClick={onBackHome}
-        style={{ alignSelf: 'flex-start', background: 'none', border: '1px solid #555', color: '#aaa', cursor: 'pointer', borderRadius: '4px', padding: '4px 12px', fontSize: '0.85rem' }}
-      >
+    <div className="tv-root">
+      <button onClick={onBackHome} className="tv-home-btn">
         ← Home
       </button>
 
       {selectedChapter && (
-        <div style={{ alignSelf: 'flex-start', display: 'flex', flexDirection: 'column', gap: '1px' }}>
-          {study && <span style={{ fontSize: '0.72rem', color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '340px' }}>{study.name}</span>}
-          <span style={{ fontSize: '0.88rem', color: '#bbb', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '340px' }}>{selectedChapter.title}</span>
+        <div className="tv-chapter-meta">
+          {study && <span className="tv-study-name">{study.name}</span>}
+          <span className="tv-chapter-name">{selectedChapter.title}</span>
         </div>
       )}
 
       {selectedChapter && (
-        <div style={{ fontSize: '0.9rem', color: '#555', minHeight: '1.2em' }}>
+        <div className="tv-move-info">
           {inlineDetour ? (
             <>
-              <span style={{ color: '#f0c040' }}>↪ Sideline</span>
+              <span className="tv-inline-label">↪ Sideline</span>
               {inlineDetour.detourIndex >= 0 && (
-                <span style={{ marginLeft: '6px' }}>{inlineDetour.detourLine[inlineDetour.detourIndex]?.san}</span>
+                <span className="tv-inline-san">{inlineDetour.detourLine[inlineDetour.detourIndex]?.san}</span>
               )}
-              <span style={{ marginLeft: '8px', color: '#aaa' }}>
+              <span className="tv-progress-count">
                 ({Math.max(0, inlineDetour.detourIndex + 1)}/{inlineDetour.detourLine.length})
               </span>
             </>
@@ -96,17 +94,22 @@ export default function TrainingView({
                 const independentCount = alts.filter(alt => alt.independent).length
                 if (!inlineCount && !independentCount) return null
                 return (
-                  <span style={{ marginLeft: '6px', fontSize: '0.75rem' }}>
+                  <span className="tv-branch-dots">
                     {inlineCount > 0 && (
-                      <span title={`${inlineCount} inline sideline(s)`} style={{ color: '#f0c040' }}>{'●'.repeat(inlineCount)}</span>
+                      <span title={`${inlineCount} inline sideline(s)`} className="tv-inline-dot">{'●'.repeat(inlineCount)}</span>
                     )}
                     {independentCount > 0 && (
-                      <span title={`${independentCount} independent variation(s)`} style={{ color: '#60adf0', marginLeft: inlineCount > 0 ? '3px' : undefined }}>{'●'.repeat(independentCount)}</span>
+                      <span
+                        title={`${independentCount} independent variation(s)`}
+                        className={`tv-indep-dot ${inlineCount > 0 ? 'tv-indep-dot-with-inline' : ''}`}
+                      >
+                        {'●'.repeat(independentCount)}
+                      </span>
                     )}
                   </span>
                 )
               })()}
-              <span style={{ marginLeft: '8px', color: '#aaa' }}>
+              <span className="tv-progress-count">
                 ({moveIndex + 1} / {mainline.length})
               </span>
             </>
@@ -124,21 +127,18 @@ export default function TrainingView({
         resetKey={boardResetKey}
       />
 
-      <div style={{ maxWidth: '400px', width: '100%', padding: '8px 12px', borderRadius: '6px', textAlign: 'center', fontSize: '0.9rem', minHeight: '36px' }}>
-        {quizMode && quizDone && <span style={{ color: '#5c5', fontWeight: 'bold' }}>✓ Line complete!</span>}
+      <div className="tv-feedback">
+        {quizMode && quizDone && <span className="tv-line-complete">✓ Line complete!</span>}
         {quizMode && quizWrong && !revealedAnswer && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
-            <span style={{ color: '#e55' }}>✗ Wrong move</span>
-            <button
-              onClick={onRevealAnswer}
-              style={{ padding: '4px 16px', cursor: 'pointer', background: '#3a2020', color: '#ffaaaa', border: '1px solid #7a3030', borderRadius: '4px', fontSize: '0.82rem' }}
-            >
+          <div className="tv-wrong-wrap">
+            <span className="tv-wrong">✗ Wrong move</span>
+            <button onClick={onRevealAnswer} className="tv-reveal-btn">
               Reveal answer
             </button>
           </div>
         )}
         {quizMode && quizWrong && revealedAnswer && (
-          <span style={{ color: '#e55' }}>✗ Wrong - expected <strong>{quizWrong}</strong></span>
+          <span className="tv-wrong">✗ Wrong - expected <strong>{quizWrong}</strong></span>
         )}
       </div>
 
@@ -150,49 +150,31 @@ export default function TrainingView({
             : mainline[moveIndex]?.comment
         if (!comment) return null
         return (
-          <div
-            style={{
-              maxWidth: '400px',
-              width: '100%',
-              maxHeight: '120px',
-              padding: '8px 12px',
-              borderRadius: '6px',
-              boxSizing: 'border-box',
-              overflowY: 'auto',
-              background: '#f0ede4',
-              color: '#444',
-              fontSize: '0.875rem',
-              fontStyle: 'italic',
-              lineHeight: '1.5',
-            }}
-          >
+          <div className="tv-comment">
             {comment}
           </div>
         )
       })()}
 
       {selectedChapter && branchForks.length > 0 && (
-        <div style={{ maxWidth: '400px', width: '100%' }}>
-          <button
-            onClick={onToggleBranches}
-            style={{ fontSize: '0.8rem', padding: '4px 10px', cursor: 'pointer', width: '100%', background: '#2b2b2b', color: '#ccc', border: '1px solid #444', borderRadius: '4px' }}
-          >
+        <div className="tv-variations-root">
+          <button onClick={onToggleBranches} className="tv-variations-toggle">
             {showBranches ? '▲' : '▼'} See all variations in chapter
           </button>
           {showBranches && (
-            <div style={{ background: '#1e1e1e', border: '1px solid #fa8c8c', borderTop: 'none', borderRadius: '0 0 4px 4px', padding: '8px', fontSize: '0.8rem', color: '#ccc' }}>
+            <div className="tv-variations-list">
               {branchForks.map((fork, index) => (
-                <div key={index} style={{ marginBottom: '8px', paddingBottom: '8px', borderBottom: index < branchForks.length - 1 ? '1px solid #333' : 'none' }}>
-                  <span style={{ color: '#888' }}>
+                <div key={index} className={`tv-variation-item ${index < branchForks.length - 1 ? 'tv-variation-item-divider' : ''}`}>
+                  <span className="tv-move-prefix">
                     {fork.moveNumber}{fork.side === 'w' ? '.' : '...'}
                   </span>{' '}
-                  <strong style={{ color: '#fff' }}>{fork.mainSan}</strong>
-                  <span style={{ color: '#888' }}> (mainline)</span>
+                  <strong className="tv-main-san">{fork.mainSan}</strong>
+                  <span className="tv-mainline-label"> (mainline)</span>
                   {fork.alts.map((alt, altIndex) => (
-                    <div key={altIndex} style={{ marginTop: '3px', paddingLeft: '12px' }}>
-                      <span style={{ color: alt.independent ? '#60adf0' : '#f0c040' }}>●</span>{' '}
+                    <div key={altIndex} className="tv-alt-line">
+                      <span className={alt.independent ? 'tv-alt-dot-independent' : 'tv-alt-dot-inline'}>●</span>{' '}
                       <strong>{alt.san}</strong>{' '}
-                      <span style={{ color: '#888' }}>({alt.independent ? 'independent' : 'inline'})</span>
+                      <span className="tv-alt-type">({alt.independent ? 'independent' : 'inline'})</span>
                     </div>
                   ))}
                 </div>
