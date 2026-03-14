@@ -4,12 +4,14 @@ export type FlatMove = {
   fen: string
   san: string
   comment?: string
+  annotation?: string
 }
 
 export type MainlineMove = {
   fen: string
   san: string
   comment?: string
+  annotation?: string
   alternatives: MoveNode[]
 }
 
@@ -35,7 +37,7 @@ export function flattenDetour(root: MoveNode): FlatMove[] {
   const line: FlatMove[] = []
   let node: MoveNode | undefined = root
   while (node) {
-    line.push({ fen: node.fen, san: node.san, comment: node.comment })
+    line.push({ fen: node.fen, san: node.san, comment: node.comment, annotation: node.annotation })
     node = node.children[0]
   }
   return line

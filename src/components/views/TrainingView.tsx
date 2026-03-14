@@ -108,6 +108,12 @@ export default function TrainingView({
     ? countMovesForSide(inlineDetour.forkFen, inlineDetour.detourLine, userColor, inlineDetour.detourIndex)
     : 0
 
+  const activeAnnotation = inlineDetour && inlineDetour.detourIndex >= 0
+    ? inlineDetour.detourLine[inlineDetour.detourIndex]?.annotation
+    : moveIndex === -1
+      ? undefined
+      : mainline[moveIndex]?.annotation
+
   return (
     <div className="tv-root">
       <button onClick={onBackHome} className="tv-home-btn">
@@ -127,7 +133,10 @@ export default function TrainingView({
             <>
               <span className="tv-inline-label">↪ Sideline</span>
               {inlineDetour.detourIndex >= 0 && (
-                <span className="tv-inline-san">{inlineDetour.detourLine[inlineDetour.detourIndex]?.san}</span>
+                <span className="tv-inline-san">
+                  {inlineDetour.detourLine[inlineDetour.detourIndex]?.san}
+                  {inlineDetour.detourLine[inlineDetour.detourIndex]?.annotation ? ` ${inlineDetour.detourLine[inlineDetour.detourIndex]?.annotation}` : ''}
+                </span>
               )}
               <span className="tv-progress-count">
                 ({detourDoneForUser}/{detourTotalForUser})
@@ -137,7 +146,7 @@ export default function TrainingView({
             <>
               {moveIndex === -1
                 ? 'Start position'
-                : `${Math.ceil((moveIndex + 1) / 2)}${mainline[moveIndex] ? (moveIndex % 2 === 0 ? '.' : '...') : ''} ${mainline[moveIndex]?.san ?? ''}`}
+                : `${Math.ceil((moveIndex + 1) / 2)}${mainline[moveIndex] ? (moveIndex % 2 === 0 ? '.' : '...') : ''} ${mainline[moveIndex]?.san ?? ''}${mainline[moveIndex]?.annotation ? ` ${mainline[moveIndex]?.annotation}` : ''}`}
               {moveIndex >= 0 && (() => {
                 const alts = mainline[moveIndex]?.alternatives ?? []
                 const inlineCount = alts.filter(alt => !alt.independent).length
@@ -175,6 +184,7 @@ export default function TrainingView({
         orientation={activePlayerColor}
         onMove={quizMode ? onMove : undefined}
         resetKey={boardResetKey}
+        annotation={activeAnnotation}
         className={isBoardShaking ? 'tv-board-shake' : undefined}
       />
 

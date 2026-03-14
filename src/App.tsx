@@ -212,7 +212,7 @@ function App() {
     let nodes: MoveNode[] = selectedChapter.moves
     while (nodes.length > 0) {
       const node = nodes[0]
-      line.push({ fen: node.fen, san: node.san, comment: node.comment, alternatives: nodes.slice(1) })
+      line.push({ fen: node.fen, san: node.san, comment: node.comment, annotation: node.annotation, alternatives: nodes.slice(1) })
       nodes = node.children
     }
     return line

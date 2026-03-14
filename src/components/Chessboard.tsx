@@ -82,8 +82,53 @@ function getLegalDests(chess: Chess): Map<Key, Key[]> {
   return dests
 }
 
+function findMoveToReachFen(prevFen: string, nextFen: string): { from: string; to: string } | null {
+  const chess = new Chess(prevFen)
+  const match = chess.moves({ verbose: true }).find(mv => {
+    const probe = new Chess(prevFen)
+    probe.move(mv)
+    return probe.fen() === nextFen
+  })
+  return match ? { from: match.from, to: match.to } : null
+}
+
+function squareCornerAnchor(square: string, orientation: 'white' | 'black', boardSize: number): { left: number; top: number } | null {
+  if (!/^[a-h][1-8]$/.test(square)) return null
+  const file = square.charCodeAt(0) - 97 // a=0 ... h=7
+  const rank = Number(square[1])
+  const squareSize = boardSize / 8
+
+  const xIndex = orientation === 'white' ? file : 7 - file
+  const yIndex = orientation === 'white' ? 8 - rank : rank - 1
+
+  return {
+    // Slight inset from the square's top-right corner keeps the glyph readable.
+    left: (xIndex + 1) * squareSize - squareSize * 0.16,
+    top: yIndex * squareSize + squareSize * 0.2,
+  }
+}
+
+function annotationColorClass(annotation: string): string {
+  const token = annotation.trim()
+  switch (token) {
+    case '!':
+      return 'cg-annotation-good'
+    case '?':
+      return 'cg-annotation-inaccuracy'
+    case '??':
+      return 'cg-annotation-blunder'
+    case '!!':
+      return 'cg-annotation-brilliant'
+    case '?!':
+      return 'cg-annotation-questionable'
+    default:
+      return 'cg-annotation-default'
+  }
+}
+
 interface ChessboardProps {
   fen?: string
+  annotation?: string
   readonly?: boolean
   soundEnabled?: boolean
   className?: string
@@ -97,8 +142,9 @@ interface ChessboardProps {
   resetKey?: number
 }
 
-export default function Chessboard({ fen, readonly = false, soundEnabled = true, className, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
+export default function Chessboard({ fen, annotation, readonly = false, soundEnabled = true, className, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
   const [boardSize, setBoardSize] = useState(() => Math.min(400, window.innerWidth - 32))
+  const [lastMoveTo, setLastMoveTo] = useState<string | null>(null)
 
   useEffect(() => {
     preloadMoveSounds()
@@ -160,6 +206,9 @@ export default function Chessboard({ fen, readonly = false, soundEnabled = true,
             if (accepted !== false && soundEnabled) {
               playMoveSound(from, to, new Chess(fenRef.current ?? undefined))
             }
+            if (accepted !== false) {
+              setLastMoveTo(to)
+            }
             if (accepted === false) {
               // Wrong move — snap back instantly without animation
               const currentFen = fenRef.current
@@ -183,6 +232,7 @@ export default function Chessboard({ fen, readonly = false, soundEnabled = true,
             if (soundEnabled) {
               playMoveSound(from, to, chess)
             }
+            setLastMoveTo(to)
             chess.move({ from, to, promotion: 'q' })
             const nextColor = chess.turn() === 'w' ? 'white' as const : 'black' as const
             ground.set({
@@ -209,6 +259,9 @@ export default function Chessboard({ fen, readonly = false, soundEnabled = true,
     prevResetKeyRef.current = resetKey
     const prevFen = prevFenRef.current
     prevFenRef.current = fen
+    if (isReset) {
+      setLastMoveTo(null)
+    }
     if (!readonly && playerColor) {
       const chess = new Chess(fen ?? undefined)
       const fenColor = chess.turn() === 'w' ? 'white' as const : 'black' as const
@@ -226,21 +279,40 @@ export default function Chessboard({ fen, readonly = false, soundEnabled = true,
       // Play sound for opponent's auto-moves: fen changed and it's now the player's turn
       if (!isReset && isPlayerTurn && prevFen && prevFen !== fen) {
         const prevChess = new Chess(prevFen)
-        const m = prevChess.moves({ verbose: true }).find(mv => {
-          const t = new Chess(prevFen)
-          t.move(mv)
-          return t.fen() === fen
-        })
+        const m = findMoveToReachFen(prevFen, fen ?? '')
         if (m && soundEnabled) playMoveSound(m.from, m.to, prevChess)
+      }
+      if (!isReset && prevFen && fen && prevFen !== fen) {
+        const m = findMoveToReachFen(prevFen, fen)
+        setLastMoveTo(m?.to ?? null)
       }
     } else {
       g.set({ fen: fen ?? 'start', lastMove: isReset ? [] : undefined })
+      if (!isReset && prevFen && fen && prevFen !== fen) {
+        const m = findMoveToReachFen(prevFen, fen)
+        setLastMoveTo(m?.to ?? null)
+      }
     }
   }, [fen, resetKey, readonly, playerColor])
 
+  const annotationPosition = annotation && lastMoveTo
+    ? squareCornerAnchor(lastMoveTo, orientation, boardSize)
+    : null
+  const annotationClass = annotation ? annotationColorClass(annotation) : 'cg-annotation-default'
+
   return (
     <div className={className}>
-      <div ref={boardRef} style={{ width: `${boardSize}px`, height: `${boardSize}px` }} />
+      <div className="cg-board-shell" style={{ width: `${boardSize}px`, height: `${boardSize}px` }}>
+        <div ref={boardRef} style={{ width: `${boardSize}px`, height: `${boardSize}px` }} />
+        {annotation && annotationPosition && (
+          <div
+            className={`cg-annotation-glyph ${annotationClass}`}
+            style={{ left: `${annotationPosition.left}px`, top: `${annotationPosition.top}px` }}
+          >
+            {annotation}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

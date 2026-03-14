@@ -6,9 +6,43 @@ export interface MoveNode {
   san: string
   fen: string
   comment?: string
+  annotation?: string
   children: MoveNode[]
   /** Only set on variation roots (non-mainline children). true = own session, false = inline detour */
   independent?: boolean
+}
+
+const NAG_TO_GLYPH: Record<string, string> = {
+  '$1': '!',
+  '$2': '?',
+  '$3': '!!',
+  '$4': '??',
+  '$5': '!?',
+  '$6': '?!',
+}
+
+const GLYPH_TOKENS = new Set(['!', '?', '!!', '??', '!?', '?!'])
+
+function annotationFromSanSuffix(san: string): string | undefined {
+  const match = san.match(/(\!\?|\?\!|\!\!|\?\?|\!|\?)$/)
+  return match?.[1]
+}
+
+function annotationFromMove(san: string, nag: string[] | null | undefined): string | undefined {
+  const fromSan = annotationFromSanSuffix(san)
+  if (!Array.isArray(nag) || nag.length === 0) return fromSan
+
+  const glyphs = nag
+    .map(token => token.trim())
+    .map(token => NAG_TO_GLYPH[token] ?? (GLYPH_TOKENS.has(token) ? token : undefined))
+    .filter((token): token is string => Boolean(token))
+
+  if (fromSan) {
+    glyphs.push(fromSan)
+  }
+
+  if (glyphs.length === 0) return undefined
+  return Array.from(new Set(glyphs)).join(' ')
 }
 
 /** Depth of the mainline of a node list (following children[0] at each step) */
@@ -55,6 +89,7 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
     san: move.notation.notation,
     fen,
     comment: [move.commentMove, move.commentAfter].filter(Boolean).join(' ') || undefined,
+    annotation: annotationFromMove(move.notation.notation, move.nag),
     children: buildLine(fen, rest, chess),
   }
 
@@ -72,6 +107,7 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
       san: varFirst.notation.notation,
       fen: varFen,
       comment: [varFirst.commentMove, varFirst.commentAfter].filter(Boolean).join(' ') || undefined,
+      annotation: annotationFromMove(varFirst.notation.notation, varFirst.nag),
       children: altChildren,
       independent: depth > INLINE_MAX_DEPTH,
     } satisfies MoveNode]

@@ -2,3 +2,54 @@
 .cg-wrap coords.files {
   left: 19px !important;
 }
+
+.cg-board-shell {
+  position: relative;
+}
+
+.cg-annotation-glyph {
+  position: absolute;
+  z-index: 30;
+  transform: translate(-50%, -50%);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.72rem;
+  line-height: 1;
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+.cg-annotation-default {
+  background: #f4d35e;
+}
+
+.cg-annotation-good {
+  background: #57d26f;
+}
+
+.cg-annotation-inaccuracy {
+  background: #f4d35e;
+}
+
+.cg-annotation-blunder {
+  background: #f25f5c;
+}
+
+.cg-annotation-brilliant {
+  background: #2ec4b6;
+}
+
+.cg-annotation-questionable {
+  background: #b07cff;
+}
