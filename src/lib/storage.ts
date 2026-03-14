@@ -11,6 +11,10 @@ export interface StoredStudy {
 const KEY = 'chess-opening-trainer:studies'
 const SOUND_ENABLED_KEY = 'chess-opening-trainer:sound-enabled'
 
+function normalizeStudyName(name: string): string {
+  return name.trim().toLocaleLowerCase()
+}
+
 export function loadSoundEnabled(): boolean {
   try {
     const raw = localStorage.getItem(SOUND_ENABLED_KEY)
@@ -37,15 +41,17 @@ export function loadStudies(): StoredStudy[] {
 
 export function saveStudy(name: string, playerColor: 'white' | 'black', chapters: Chapter[]): StoredStudy {
   const studies = loadStudies()
-  const existing = studies.find(s => s.name === name)
+  const normalizedName = normalizeStudyName(name)
+  const sanitizedName = name.trim() || name
+  const existing = studies.find(s => normalizeStudyName(s.name) === normalizedName)
   if (existing) {
     // Replace in-place, keeping the same ID so scores are preserved
-    const study: StoredStudy = { ...existing, playerColor, chapters }
+    const study: StoredStudy = { ...existing, name: sanitizedName, playerColor, chapters }
     const updated = studies.map(s => s.id === existing.id ? study : s)
     localStorage.setItem(KEY, JSON.stringify(updated))
     return study
   }
-  const study: StoredStudy = { id: Date.now().toString(), name, playerColor, chapters }
+  const study: StoredStudy = { id: Date.now().toString(), name: sanitizedName, playerColor, chapters }
   studies.push(study)
   localStorage.setItem(KEY, JSON.stringify(studies))
   return study

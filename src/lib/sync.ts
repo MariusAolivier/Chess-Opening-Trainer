@@ -33,6 +33,10 @@ type FirestoreStudy = {
   chapters?: Chapter[]
 }
 
+function normalizeStudyName(name: string): string {
+  return name.trim().toLocaleLowerCase()
+}
+
 function encodeStudy(study: StoredStudy): FirestoreStudy {
   return {
     id: study.id,
@@ -68,7 +72,7 @@ function decodeStudy(data: FirestoreStudy): StoredStudy | null {
 }
 
 function studyNameKey(study: StoredStudy): string {
-  return study.name
+  return normalizeStudyName(study.name)
 }
 
 function parseStudyTimestamp(studyId: string): number | null {
@@ -129,17 +133,32 @@ function buildChapterIdRemap(studiesById: Map<string, StoredStudy>, studyIdRemap
 // ── Uploads ─────────────────────────────────────────────────────────────────
 
 export async function uploadStudy(study: StoredStudy): Promise<void> {
+  const normalizedName = normalizeStudyName(study.name)
+  const studiesSnap = await getDocs(collection(db, 'studies'))
+
+  const duplicateIds = studiesSnap.docs
+    .filter(snapshot => {
+      const data = snapshot.data() as FirestoreStudy
+      return snapshot.id !== study.id && normalizeStudyName(data.name) === normalizedName
+    })
+    .map(snapshot => snapshot.id)
+
+  if (duplicateIds.length > 0) {
+    await Promise.all(duplicateIds.map(id => deleteDoc(studyDoc(id))))
+  }
+
   await setDoc(studyDoc(study.id), encodeStudy(study))
 }
 
 export async function deleteStudyRemote(studyId: string, studyName?: string): Promise<void> {
   const idsToDelete = new Set<string>([studyId])
+  const normalizedName = studyName ? normalizeStudyName(studyName) : null
 
-  if (studyName) {
+  if (normalizedName) {
     const studiesSnap = await getDocs(collection(db, 'studies'))
     studiesSnap.docs.forEach(snapshot => {
       const data = snapshot.data() as FirestoreStudy
-      if (data.name === studyName) {
+      if (normalizeStudyName(data.name) === normalizedName) {
         idsToDelete.add(snapshot.id)
       }
     })
