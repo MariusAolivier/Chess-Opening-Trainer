@@ -57,6 +57,41 @@ export default function TrainingView({
   onRevealAnswer,
 }: TrainingViewProps) {
   const study = storedStudies.find(item => item.id === selectedStudyId)
+  const userColor = activePlayerColor === 'white' ? 'w' : 'b'
+
+  function countMovesForSide(
+    startFen: string,
+    line: Array<{ fen: string }>,
+    side: 'w' | 'b',
+    upToIndex?: number,
+  ): number {
+    if (line.length === 0) return 0
+    const lastIndex = upToIndex === undefined ? line.length - 1 : Math.min(upToIndex, line.length - 1)
+    if (lastIndex < 0) return 0
+
+    let count = 0
+    let fenBefore = startFen
+    for (let index = 0; index <= lastIndex; index += 1) {
+      const mover = fenBefore.split(' ')[1] as 'w' | 'b'
+      if (mover === side) count += 1
+      fenBefore = line[index].fen
+    }
+    return count
+  }
+
+  const mainlineTotalForUser = selectedChapter
+    ? countMovesForSide(selectedChapter.startFen, mainline, userColor)
+    : 0
+  const mainlineDoneForUser = selectedChapter
+    ? countMovesForSide(selectedChapter.startFen, mainline, userColor, moveIndex)
+    : 0
+
+  const detourTotalForUser = inlineDetour
+    ? countMovesForSide(inlineDetour.forkFen, inlineDetour.detourLine, userColor)
+    : 0
+  const detourDoneForUser = inlineDetour
+    ? countMovesForSide(inlineDetour.forkFen, inlineDetour.detourLine, userColor, inlineDetour.detourIndex)
+    : 0
 
   return (
     <div className="tv-root">
@@ -80,7 +115,7 @@ export default function TrainingView({
                 <span className="tv-inline-san">{inlineDetour.detourLine[inlineDetour.detourIndex]?.san}</span>
               )}
               <span className="tv-progress-count">
-                ({Math.max(0, inlineDetour.detourIndex + 1)}/{inlineDetour.detourLine.length})
+                ({detourDoneForUser}/{detourTotalForUser})
               </span>
             </>
           ) : (
@@ -110,7 +145,7 @@ export default function TrainingView({
                 )
               })()}
               <span className="tv-progress-count">
-                ({moveIndex + 1} / {mainline.length})
+                ({mainlineDoneForUser} / {mainlineTotalForUser})
               </span>
             </>
           )}

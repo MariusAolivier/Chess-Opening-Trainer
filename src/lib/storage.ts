@@ -1,5 +1,5 @@
 import type { Chapter } from './pgn'
-import { deleteScoresForStudy, deleteAndReindexChapter } from './scores'
+import { deleteScoresForStudy, deleteChapterScores } from './scores'
 
 export interface StoredStudy {
   id: string       // unique key, timestamp-based
@@ -65,6 +65,10 @@ export function deleteStudy(id: string): StoredStudy[] {
  */
 export function deleteChapter(studyId: string, chapterIndex: number): StoredStudy[] {
   const studies = loadStudies()
+  const study = studies.find(s => s.id === studyId)
+  if (!study) return studies
+
+  const deletedChapterId = chapterId(studyId, study.chapters, chapterIndex)
   const updated = studies
     .map(s => {
       if (s.id !== studyId) return s
@@ -72,11 +76,31 @@ export function deleteChapter(studyId: string, chapterIndex: number): StoredStud
     })
     .filter(s => s.chapters.length > 0)
   localStorage.setItem(KEY, JSON.stringify(updated))
-  deleteAndReindexChapter(studyId, chapterIndex)
+  deleteChapterScores(deletedChapterId)
   return updated
 }
 
-/** Stable id for a single chapter, combining study id and chapter index. */
-export function chapterId(studyId: string, chapterIndex: number): string {
+function chapterKeyPart(title: string): string {
+  const normalized = title.trim() || 'untitled'
+  return encodeURIComponent(normalized)
+}
+
+export function buildChapterIds(studyId: string, chapters: Chapter[]): string[] {
+  const counts = new Map<string, number>()
+
+  return chapters.map(chapter => {
+    const key = chapterKeyPart(chapter.title)
+    const occurrence = (counts.get(key) ?? 0) + 1
+    counts.set(key, occurrence)
+    return `${studyId}::${key}::${occurrence}`
+  })
+}
+
+export function legacyChapterId(studyId: string, chapterIndex: number): string {
   return `${studyId}_${chapterIndex}`
+}
+
+/** Stable id for a single chapter, combining study id and chapter title. */
+export function chapterId(studyId: string, chapters: Chapter[], chapterIndex: number): string {
+  return buildChapterIds(studyId, chapters)[chapterIndex]
 }

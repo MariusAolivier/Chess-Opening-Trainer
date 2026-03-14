@@ -106,14 +106,20 @@ function pruneSingleMoveBranches(nodes: MoveNode[]): MoveNode[] {
  * temporarily enters each alternative by following that branch's primary path
  * (children[0] chain) to its leaf.
  */
-export function extractLines(chapter: Chapter): { lineId: string; displaySan: string }[] {
-  const lines: { lineId: string; displaySan: string }[] = []
+export interface TrainableLine {
+  lineId: string
+  displaySan: string
+  plyCount: number
+}
+
+export function extractTrainableLines(chapter: Chapter): TrainableLine[] {
+  const lines: TrainableLine[] = []
   const seen = new Set<string>()
 
-  function addLine(lineId: string, displaySan: string) {
+  function addLine(lineId: string, displaySan: string, plyCount: number) {
     if (seen.has(lineId)) return
     seen.add(lineId)
-    lines.push({ lineId, displaySan })
+    lines.push({ lineId, displaySan, plyCount })
   }
 
   function leafOnPrimaryPath(root: MoveNode): MoveNode {
@@ -132,7 +138,7 @@ export function extractLines(chapter: Chapter): { lineId: string; displaySan: st
       const alternative = nodes[index]
       if (alternative.independent) continue
       const leaf = leafOnPrimaryPath(alternative)
-      addLine(leaf.fen, alternative.san)
+      addLine(leaf.fen, alternative.san, 1 + lineDepth(alternative.children))
     }
 
     const main = nodes[0]
@@ -141,10 +147,14 @@ export function extractLines(chapter: Chapter): { lineId: string; displaySan: st
   }
 
   if (mainlineLeaf) {
-    addLine(mainlineLeaf.fen, 'Main line')
+    addLine(mainlineLeaf.fen, 'Main line', lineDepth(chapter.moves))
   }
 
   return lines
+}
+
+export function extractLines(chapter: Chapter): { lineId: string; displaySan: string }[] {
+  return extractTrainableLines(chapter).map(({ lineId, displaySan }) => ({ lineId, displaySan }))
 }
 
 /**

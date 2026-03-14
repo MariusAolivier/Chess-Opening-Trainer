@@ -210,36 +210,95 @@ export function getReviewStreak(now: number = Date.now()): { current: number; be
 
 /** Delete all scores for a given study (e.g. when the study is deleted). */
 export function deleteScoresForStudy(studyId: string): void {
-  const records = load().filter(r => !r.chapterId.startsWith(studyId + '_'))
+  const records = load().filter(r => !r.chapterId.startsWith(studyId + '_') && !r.chapterId.startsWith(studyId + '::'))
   save(records)
-  const mainlines = loadForkMainlines().filter(m => !m.chapterId.startsWith(studyId + '_'))
+  const mainlines = loadForkMainlines().filter(m => !m.chapterId.startsWith(studyId + '_') && !m.chapterId.startsWith(studyId + '::'))
   saveForkMainlines(mainlines)
 }
 
 /**
- * Delete scores for a single chapter and re-index all subsequent chapters
- * (chapter indices shift down by 1 after a deletion).
+ * Delete scores and fork-mainline data for a single chapter.
  */
-export function deleteAndReindexChapter(studyId: string, deletedIndex: number): void {
-  const deletedCid = `${studyId}_${deletedIndex}`
-
-  let records = load().filter(r => r.chapterId !== deletedCid)
-  records = records.map(r => {
-    if (!r.chapterId.startsWith(studyId + '_')) return r
-    const idx = parseInt(r.chapterId.slice(studyId.length + 1), 10)
-    if (idx > deletedIndex) return { ...r, chapterId: `${studyId}_${idx - 1}` }
-    return r
-  })
+export function deleteChapterScores(chapterId: string): void {
+  const records = load().filter(r => r.chapterId !== chapterId)
   save(records)
 
-  let mainlines = loadForkMainlines().filter(m => m.chapterId !== deletedCid)
-  mainlines = mainlines.map(m => {
-    if (!m.chapterId.startsWith(studyId + '_')) return m
-    const idx = parseInt(m.chapterId.slice(studyId.length + 1), 10)
-    if (idx > deletedIndex) return { ...m, chapterId: `${studyId}_${idx - 1}` }
-    return m
-  })
+  const mainlines = loadForkMainlines().filter(m => m.chapterId !== chapterId)
   saveForkMainlines(mainlines)
+}
+
+function scorePriority(record: ScoreRecord): number {
+  const dueTime = Number.isNaN(Date.parse(record.dueDate)) ? 0 : Date.parse(record.dueDate)
+  return record.interval * 1_000_000_000 + dueTime
+}
+
+export function remapChapterIds(remap: Map<string, string>): boolean {
+  if (remap.size === 0) return false
+
+  const originalScores = load()
+  let changed = false
+  const scoresById = new Map<string, ScoreRecord>()
+
+  originalScores.forEach(record => {
+    const nextChapterId = remap.get(record.chapterId) ?? record.chapterId
+    if (nextChapterId !== record.chapterId) changed = true
+    const nextRecord = nextChapterId === record.chapterId ? record : { ...record, chapterId: nextChapterId }
+    const key = makeId(nextRecord.chapterId, nextRecord.lineId)
+    const existing = scoresById.get(key)
+    if (!existing || scorePriority(nextRecord) > scorePriority(existing)) {
+      scoresById.set(key, nextRecord)
+    }
+  })
+
+  if (changed) {
+    save([...scoresById.values()])
+  }
+
+  const originalMainlines = loadForkMainlines()
+  const mainlinesById = new Map<string, ForkMainlineRecord>()
+  originalMainlines.forEach(record => {
+    const nextChapterId = remap.get(record.chapterId) ?? record.chapterId
+    const nextRecord = nextChapterId === record.chapterId ? record : { ...record, chapterId: nextChapterId }
+    const key = `${nextRecord.chapterId}||${nextRecord.forkFen}`
+    if (!mainlinesById.has(key)) {
+      mainlinesById.set(key, nextRecord)
+    }
+  })
+
+  if (changed) {
+    saveForkMainlines([...mainlinesById.values()])
+  }
+
+  return changed
+}
+
+export function pruneStudyChapterIds(studyId: string, validChapterIds: Set<string>): number {
+  const records = load()
+  let removed = 0
+  const kept = records.filter(record => {
+    const belongsToStudy = record.chapterId.startsWith(studyId + '::') || record.chapterId.startsWith(studyId + '_')
+    if (belongsToStudy && !validChapterIds.has(record.chapterId)) {
+      removed += 1
+      return false
+    }
+    return true
+  })
+
+  if (removed > 0) {
+    save(kept)
+  }
+
+  const mainlines = loadForkMainlines()
+  const keptMainlines = mainlines.filter(record => {
+    const belongsToStudy = record.chapterId.startsWith(studyId + '::') || record.chapterId.startsWith(studyId + '_')
+    return !belongsToStudy || validChapterIds.has(record.chapterId)
+  })
+
+  if (keptMainlines.length !== mainlines.length) {
+    saveForkMainlines(keptMainlines)
+  }
+
+  return removed
 }
 
 /**

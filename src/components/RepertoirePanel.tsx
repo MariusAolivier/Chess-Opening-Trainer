@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { extractLines } from '../lib/pgn'
+import { extractTrainableLines } from '../lib/pgn'
 import { loadScores, type ScoreRecord } from '../lib/scores'
 import { chapterId, type StoredStudy } from '../lib/storage'
 import './RepertoirePanel.css'
@@ -48,22 +48,24 @@ export default function RepertoirePanel({
     <div className="rp-root">
       {studies.map(study => {
         const expanded = expandedStudies.has(study.id)
-        let totalLines = 0
-        let startedLines = 0
+        let totalMoves = 0
+        let completedMoves = 0
         let dueLines = 0
 
         study.chapters.forEach((chapter, chapterIndex) => {
-          const cid = chapterId(study.id, chapterIndex)
-          const chapterLines = extractLines(chapter)
+          const cid = chapterId(study.id, study.chapters, chapterIndex)
+          const chapterLines = extractTrainableLines(chapter)
           const chapterScores = scoresByChapter.get(cid) ?? []
 
-          totalLines += chapterLines.length
-          startedLines += chapterLines.filter(line => chapterScores.some(score => score.lineId === line.lineId && score.interval > 0)).length
+          totalMoves += chapterLines.reduce((sum, line) => sum + line.plyCount, 0)
+          completedMoves += chapterLines
+            .filter(line => chapterScores.some(score => score.lineId === line.lineId && score.interval > 0))
+            .reduce((sum, line) => sum + line.plyCount, 0)
           dueLines += chapterScores.filter(score => new Date(score.dueDate).getTime() <= now).length
         })
 
-        const progressPercent = totalLines > 0 ? Math.round((startedLines / totalLines) * 100) : 0
-        const allChapterIds = study.chapters.map((_, chapterIndex) => chapterId(study.id, chapterIndex))
+        const progressPercent = totalMoves > 0 ? Math.round((completedMoves / totalMoves) * 100) : 0
+        const allChapterIds = study.chapters.map((_, chapterIndex) => chapterId(study.id, study.chapters, chapterIndex))
         const selectedCount = allChapterIds.filter(id => selectedChapterIds.has(id)).length
         const studyAllSelected = selectedCount === allChapterIds.length
         const studySomeSelected = selectedCount > 0 && selectedCount < allChapterIds.length
@@ -114,13 +116,15 @@ export default function RepertoirePanel({
             {expanded && (
               <div className="rp-chapters-wrap">
                 {study.chapters.map((chapter, chapterIndex) => {
-                  const cid = chapterId(study.id, chapterIndex)
-                  const chapterLines = extractLines(chapter)
+                  const cid = chapterId(study.id, study.chapters, chapterIndex)
+                  const chapterLines = extractTrainableLines(chapter)
                   const chapterScores = scoresByChapter.get(cid) ?? []
-                  const chapterTotal = chapterLines.length
-                  const chapterStarted = chapterLines.filter(line => chapterScores.some(score => score.lineId === line.lineId && score.interval > 0)).length
+                  const chapterTotalMoves = chapterLines.reduce((sum, line) => sum + line.plyCount, 0)
+                  const chapterCompletedMoves = chapterLines
+                    .filter(line => chapterScores.some(score => score.lineId === line.lineId && score.interval > 0))
+                    .reduce((sum, line) => sum + line.plyCount, 0)
                   const chapterDue = chapterScores.filter(score => new Date(score.dueDate).getTime() <= now).length
-                  const chapterPercent = chapterTotal > 0 ? Math.round((chapterStarted / chapterTotal) * 100) : 0
+                  const chapterPercent = chapterTotalMoves > 0 ? Math.round((chapterCompletedMoves / chapterTotalMoves) * 100) : 0
                   const chapterSelected = selectedChapterIds.has(cid)
 
                   return (

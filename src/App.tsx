@@ -11,15 +11,19 @@ import {
   saveStudy,
   deleteStudy,
   deleteChapter,
+  buildChapterIds,
   loadSoundEnabled,
   saveSoundEnabled,
   type StoredStudy,
   chapterId,
+  legacyChapterId,
 } from './lib/storage'
 import {
   loadScores,
   recordReview,
   initScore,
+  pruneStudyChapterIds,
+  remapChapterIds,
   syncChapterLines,
   updateForkMainlines,
   findConflicts,
@@ -100,6 +104,19 @@ function App() {
     setStatsKey(key => key + 1)
   }
 
+  function migrateLegacyChapterIdsForStudies(studiesToMigrate: StoredStudy[]): boolean {
+    const remap = new Map<string, string>()
+
+    studiesToMigrate.forEach(study => {
+      const nextChapterIds = buildChapterIds(study.id, study.chapters)
+      study.chapters.forEach((_, chapterIndex) => {
+        remap.set(legacyChapterId(study.id, chapterIndex), nextChapterIds[chapterIndex])
+      })
+    })
+
+    return remapChapterIds(remap)
+  }
+
   function recordMainlineReview() {
     if (!selectedStudyId || !selectedChapter) return
     const chapterIndex = chapters.indexOf(selectedChapter)
@@ -110,7 +127,7 @@ function App() {
 
     const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((acc, value) => acc + value, 0)
     const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
-    recordReview(chapterId(selectedStudyId, chapterIndex), leaf.fen, 'Main line', quality)
+    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), leaf.fen, 'Main line', quality)
     persistReviewData()
   }
 
@@ -139,10 +156,16 @@ function App() {
     setSyncStatus('syncing')
     fetchAndMerge()
       .then(changed => {
+        const mergedStudies = loadStudies()
+        const migrated = migrateLegacyChapterIdsForStudies(mergedStudies)
         setSyncStatus('ok')
-        if (changed) {
-          setStoredStudies(loadStudies())
+        setStoredStudies(mergedStudies)
+        if (changed || migrated) {
           setStatsKey(key => key + 1)
+        }
+        if (migrated) {
+          uploadScores()
+          uploadForkMainlines()
         }
       })
       .catch((err: unknown) => {
@@ -153,6 +176,12 @@ function App() {
       })
 
     const unsubScores = subscribeToScores(() => {
+      const studies = loadStudies()
+      const migrated = migrateLegacyChapterIdsForStudies(studies)
+      if (migrated) {
+        uploadScores()
+        uploadForkMainlines()
+      }
       setStatsKey(key => key + 1)
     })
     const unsubReviewActivity = subscribeToReviewActivity(() => {
@@ -252,7 +281,7 @@ function App() {
         if (selectedStudyId && selectedChapter) {
           const chapterIndex = chapters.indexOf(selectedChapter)
           const detourLeaf = detourLine[detourLine.length - 1]
-          recordReview(chapterId(selectedStudyId, chapterIndex), detourLeaf.fen, detourLine[0].san, quality)
+          recordReview(chapterId(selectedStudyId, chapters, chapterIndex), detourLeaf.fen, detourLine[0].san, quality)
           persistReviewData()
         }
 
@@ -346,10 +375,12 @@ function App() {
         const { name: parsedName, chapters: parsedChapters } = parseStudy(pgn)
         const studyName = parsedName ?? file.name.replace(/\.pgn$/i, '')
         const stored = saveStudy(studyName, uploadColor, parsedChapters)
+        migrateLegacyChapterIdsForStudies([stored])
 
         let totalReset = 0
+        totalReset += pruneStudyChapterIds(stored.id, new Set(buildChapterIds(stored.id, stored.chapters)))
         stored.chapters.forEach((chapter, chapterIndex) => {
-          const cid = chapterId(stored.id, chapterIndex)
+          const cid = chapterId(stored.id, stored.chapters, chapterIndex)
           const lines = extractLines(chapter)
           totalReset += syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
           updateForkMainlines(cid, extractForkMoves(chapter))
@@ -361,7 +392,7 @@ function App() {
         const allChaptersMap = new Map<string, string>()
         allStudies.forEach(study => {
           study.chapters.forEach((chapter, chapterIndex) => {
-            allChaptersMap.set(chapterId(study.id, chapterIndex), `${study.name} · ${chapter.title}`)
+            allChaptersMap.set(chapterId(study.id, study.chapters, chapterIndex), `${study.name} · ${chapter.title}`)
           })
         })
 
@@ -424,7 +455,7 @@ function App() {
 
   function trainChapter(study: StoredStudy, chapterIndex: number) {
     const chapter = study.chapters[chapterIndex]
-    const cid = chapterId(study.id, chapterIndex)
+    const cid = chapterId(study.id, study.chapters, chapterIndex)
 
     const lines = extractLines(chapter)
     syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
@@ -447,7 +478,7 @@ function App() {
 
     storedStudies.forEach(study => {
       study.chapters.forEach((_, chapterIndex) => {
-        const cid = chapterId(study.id, chapterIndex)
+        const cid = chapterId(study.id, study.chapters, chapterIndex)
         if (selectedChapterIds.size > 0 && !selectedChapterIds.has(cid)) return
         allEntries.push({ study, chapterIndex })
       })
@@ -456,7 +487,7 @@ function App() {
     if (allEntries.length === 0) return
 
     const dueEntries = allEntries.filter(({ study, chapterIndex }) => {
-      const cid = chapterId(study.id, chapterIndex)
+      const cid = chapterId(study.id, study.chapters, chapterIndex)
       return scores.some(score => score.chapterId === cid && new Date(score.dueDate).getTime() <= now)
     })
 
@@ -480,7 +511,7 @@ function App() {
   }
 
   function toggleStudy(study: StoredStudy) {
-    const allIds = study.chapters.map((_, chapterIndex) => chapterId(study.id, chapterIndex))
+    const allIds = study.chapters.map((_, chapterIndex) => chapterId(study.id, study.chapters, chapterIndex))
     const allSelected = allIds.every(id => selectedChapterIds.has(id))
 
     setSelectedChapterIds(previous => {
