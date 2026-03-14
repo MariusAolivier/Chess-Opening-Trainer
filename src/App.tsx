@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo } from 'react'
 import './App.css'
 import Chessboard from './components/Chessboard'
 import { parseStudy, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
-import { loadStudies, saveStudy, deleteStudy, deleteChapter, type StoredStudy, chapterId } from './lib/storage'
+import { loadStudies, saveStudy, deleteStudy, deleteChapter, loadSoundEnabled, saveSoundEnabled, type StoredStudy, chapterId } from './lib/storage'
 import { loadScores, recordReview, initScore, type ScoreRecord, syncChapterLines, updateForkMainlines, findConflicts, type ConflictInfo, getReviewStreak } from './lib/scores'
 import { fetchAndMerge, uploadStudy, deleteStudyRemote, uploadScores, uploadForkMainlines, uploadReviewActivity, subscribeToScores, subscribeToReviewActivity } from './lib/sync'
 import { Chess } from 'chess.js'
@@ -350,6 +350,9 @@ function App() {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
   const streakPanelRef = useRef<HTMLDivElement>(null)
+  const settingsPanelRef = useRef<HTMLDivElement>(null)
+  const [soundEnabled, setSoundEnabled] = useState(() => loadSoundEnabled())
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false)
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
 
   // Sync with Firestore on mount, then subscribe to score changes from other devices
@@ -393,6 +396,27 @@ function App() {
     window.addEventListener('pointerdown', handlePointerDown)
     return () => window.removeEventListener('pointerdown', handlePointerDown)
   }, [showStreakPanel])
+
+  useEffect(() => {
+    if (!showSettingsPanel) return
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!settingsPanelRef.current?.contains(event.target as Node)) {
+        setShowSettingsPanel(false)
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [showSettingsPanel])
+
+  function handleSoundToggle() {
+    setSoundEnabled(prev => {
+      const next = !prev
+      saveSoundEnabled(next)
+      return next
+    })
+  }
 
   // Flat mainline: [{fen, san, comment, alternatives}] following the first child at each node.
   // alternatives = sibling nodes that could have been played instead of this move.
@@ -819,67 +843,123 @@ function App() {
         /* ── Repertoire full page ── */
         <div style={{ position: 'fixed', inset: 0, background: '#1a1a2a', zIndex: 100, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
           <div style={{ maxWidth: '640px', width: '100%', margin: '0 auto', padding: '20px 12px 40px', boxSizing: 'border-box', overflowX: 'hidden' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '24px' }}>
-              <button
-                onClick={() => setView('home')}
-                style={{ background: 'none', border: '1px solid #555', color: '#aaa', cursor: 'pointer', borderRadius: '4px', padding: '4px 12px', fontSize: '0.85rem', flexShrink: 0 }}
-              >
-                ← Home
-              </button>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <h2 style={{ margin: 0, color: '#e8e8e8', fontSize: '1.2rem', fontWeight: 'bold' }}>My Repertoire</h2>
-                <div ref={streakPanelRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                  <button
-                    onClick={() => setShowStreakPanel(open => !open)}
-                    aria-label="Toggle streak details"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: 0,
-                      border: 'none',
-                      background: 'none',
-                      color: '#ffd27a',
-                      fontSize: '0.95rem',
-                      fontWeight: 'bold',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>🔥</span>
-                    <span>{streak.current}</span>
-                  </button>
-                  {showStreakPanel && (
-                    <div style={{
-                      minWidth: '190px',
-                      padding: '12px',
-                      borderRadius: '12px',
-                      background: 'rgba(20, 24, 40, 0.75)',
-                      backdropFilter: 'blur(12px)',
-                      WebkitBackdropFilter: 'blur(12px)',
-                      border: '1px solid rgba(60, 80, 130, 0.45)',
-                      color: '#dbe6ff',
-                      boxShadow: '0 14px 30px rgba(0, 0, 0, 0.4)',
-                      position: 'absolute',
-                      top: 'calc(100% + 8px)',
-                      left: '50%',
-                      transform: 'translateX(-50%)',
-                      zIndex: 31,
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Current</span>
-                        <span style={{ fontWeight: 'bold', color: '#ffe28a' }}>{streak.current} day{streak.current === 1 ? '' : 's'}</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '24px', width: '100%', maxWidth: '440px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                <button
+                  onClick={() => setView('home')}
+                  style={{ background: 'none', border: '1px solid #555', color: '#aaa', cursor: 'pointer', borderRadius: '4px', padding: '4px 12px', fontSize: '0.85rem', flexShrink: 0 }}
+                >
+                  ← Home
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <h2 style={{ margin: 0, color: '#e8e8e8', fontSize: '1.2rem', fontWeight: 'bold' }}>My Repertoire</h2>
+                  <div ref={streakPanelRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <button
+                      onClick={() => setShowStreakPanel(open => !open)}
+                      aria-label="Toggle streak details"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: 0,
+                        border: 'none',
+                        background: 'none',
+                        color: '#ffd27a',
+                        fontSize: '0.95rem',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span aria-hidden="true" style={{ fontSize: '1rem', lineHeight: 1 }}>🔥</span>
+                      <span>{streak.current}</span>
+                    </button>
+                    {showStreakPanel && (
+                      <div style={{
+                        minWidth: '190px',
+                        padding: '12px',
+                        borderRadius: '12px',
+                        background: 'rgba(20, 24, 40, 0.75)',
+                        backdropFilter: 'blur(12px)',
+                        WebkitBackdropFilter: 'blur(12px)',
+                        border: '1px solid rgba(60, 80, 130, 0.45)',
+                        color: '#dbe6ff',
+                        boxShadow: '0 14px 30px rgba(0, 0, 0, 0.4)',
+                        position: 'absolute',
+                        top: 'calc(100% + 8px)',
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        zIndex: 31,
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Current</span>
+                          <span style={{ fontWeight: 'bold', color: '#ffe28a' }}>{streak.current} day{streak.current === 1 ? '' : 's'}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Today</span>
+                          <span style={{ fontWeight: 'bold' }}>{streak.todayCount} review{streak.todayCount === 1 ? '' : 's'}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                          <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Best</span>
+                          <span style={{ fontWeight: 'bold' }}>{streak.best} day{streak.best === 1 ? '' : 's'}</span>
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Today</span>
-                        <span style={{ fontWeight: 'bold' }}>{streak.todayCount} review{streak.todayCount === 1 ? '' : 's'}</span>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                        <span style={{ fontSize: '0.78rem', color: '#8ea6d6' }}>Best</span>
-                        <span style={{ fontWeight: 'bold' }}>{streak.best} day{streak.best === 1 ? '' : 's'}</span>
-                      </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
+              </div>
+              <div ref={settingsPanelRef} style={{ position: 'relative', flexShrink: 0 }}>
+                <button
+                  onClick={() => setShowSettingsPanel(open => !open)}
+                  aria-label="Open settings"
+                  title="Settings"
+                  style={{
+                    border: 'none',
+                    background: 'none',
+                    color: '#d8deef',
+                    cursor: 'pointer',
+                    padding: '2px',
+                    lineHeight: 1,
+                    fontSize: '1.45rem',
+                  }}
+                >
+                  ⚙
+                </button>
+                {showSettingsPanel && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 8px)',
+                    right: 0,
+                    minWidth: '180px',
+                    borderRadius: '10px',
+                    border: '1px solid #3e4a6f',
+                    background: '#1f2438',
+                    boxShadow: '0 14px 30px rgba(0, 0, 0, 0.42)',
+                    padding: '12px',
+                    zIndex: 35,
+                  }}>
+                    <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', color: '#d8deef', fontSize: '0.86rem' }}>
+                      Sound effects
+                      <button
+                        type="button"
+                        onClick={handleSoundToggle}
+                        aria-pressed={soundEnabled}
+                        style={{
+                          width: '58px',
+                          borderRadius: '999px',
+                          border: `1px solid ${soundEnabled ? '#4f9f6a' : '#5a5f73'}`,
+                          background: soundEnabled ? '#234431' : '#2c3144',
+                          color: soundEnabled ? '#a7f0bf' : '#aeb4c9',
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                          fontSize: '0.76rem',
+                          fontWeight: 'bold',
+                        }}
+                      >
+                        {soundEnabled ? 'ON' : 'OFF'}
+                      </button>
+                    </label>
+                  </div>
+                )}
               </div>
             </div>
             {storedStudies.length === 0 && (
@@ -1028,7 +1108,7 @@ function App() {
               <div style={{ fontSize: '1rem', fontWeight: 700, color: '#888' }}>{estimatedMinutes} min</div>
             </div>
           </div>
-          <Chessboard fen={homeFen} readonly={true} />
+          <Chessboard fen={homeFen} readonly={true} soundEnabled={soundEnabled} />
           <button
             onClick={pickAndTrainNext}
             disabled={storedStudies.length === 0}
@@ -1130,6 +1210,7 @@ function App() {
         <Chessboard
           fen={currentFen}
           readonly={!quizMode && !!selectedChapter}
+          soundEnabled={soundEnabled}
           playerColor={quizMode ? activePlayerColor : undefined}
           orientation={activePlayerColor}
           onMove={quizMode ? handleQuizMove : undefined}

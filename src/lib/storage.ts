@@ -9,6 +9,21 @@ export interface StoredStudy {
 }
 
 const KEY = 'chess-opening-trainer:studies'
+const SOUND_ENABLED_KEY = 'chess-opening-trainer:sound-enabled'
+
+export function loadSoundEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(SOUND_ENABLED_KEY)
+    if (raw === null) return true
+    return raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+export function saveSoundEnabled(enabled: boolean): void {
+  localStorage.setItem(SOUND_ENABLED_KEY, String(enabled))
+}
 
 export function loadStudies(): StoredStudy[] {
   try {

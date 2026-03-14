@@ -37,6 +37,7 @@ function getLegalDests(chess: Chess): Map<Key, Key[]> {
 interface ChessboardProps {
   fen?: string
   readonly?: boolean
+  soundEnabled?: boolean
   /** Quiz mode: the color the user controls */
   playerColor?: 'white' | 'black'
   /** Board orientation (defaults to white at bottom) */
@@ -47,7 +48,7 @@ interface ChessboardProps {
   resetKey?: number
 }
 
-export default function Chessboard({ fen, readonly = false, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
+export default function Chessboard({ fen, readonly = false, soundEnabled = true, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
   const [boardSize, setBoardSize] = useState(() => Math.min(400, window.innerWidth - 32))
   useEffect(() => {
     const onResize = () => setBoardSize(Math.min(400, window.innerWidth - 32))
@@ -85,7 +86,7 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
         move(from: Key, to: Key) {
           if (isQuiz) {
             const accepted = onMoveRef.current?.(from, to)
-            if (accepted !== false) {
+            if (accepted !== false && soundEnabled) {
               playMoveSound(from, to, new Chess(fenRef.current ?? undefined))
             }
             if (accepted === false) {
@@ -108,7 +109,9 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
               requestAnimationFrame(() => { ground.set({ animation: { enabled: true } }) })
             }
           } else if (!readonly) {
-            playMoveSound(from, to, chess)
+            if (soundEnabled) {
+              playMoveSound(from, to, chess)
+            }
             chess.move({ from, to, promotion: 'q' })
             const nextColor = chess.turn() === 'w' ? 'white' as const : 'black' as const
             ground.set({
@@ -125,7 +128,7 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
       ground.destroy()
       groundRef.current = null
     }
-  }, [readonly, playerColor, orientation, boardSize]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [readonly, playerColor, orientation, boardSize, soundEnabled]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update position + dests when fen or resetKey changes
   useEffect(() => {
@@ -157,7 +160,7 @@ export default function Chessboard({ fen, readonly = false, playerColor, orienta
           t.move(mv)
           return t.fen() === fen
         })
-        if (m) playMoveSound(m.from, m.to, prevChess)
+        if (m && soundEnabled) playMoveSound(m.from, m.to, prevChess)
       }
     } else {
       g.set({ fen: fen ?? 'start', lastMove: isReset ? [] : undefined })
