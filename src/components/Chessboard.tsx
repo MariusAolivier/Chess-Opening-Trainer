@@ -7,6 +7,51 @@ import '@lichess-org/chessground/assets/chessground.brown.css'
 import '@lichess-org/chessground/assets/chessground.cburnett.css'
 import './chessboard-overrides.css'
 
+const MOVE_SOUND_FILES = ['move-check.mp3', 'castle.mp3', 'capture.mp3', 'move-self.mp3'] as const
+const moveSoundCache = new Map<string, HTMLAudioElement>()
+let moveSoundsUnlocked = false
+let moveSoundsUnlocking = false
+
+function getMoveSound(file: string): HTMLAudioElement {
+  let audio = moveSoundCache.get(file)
+  if (!audio) {
+    audio = new Audio(import.meta.env.BASE_URL + file)
+    audio.preload = 'auto'
+    moveSoundCache.set(file, audio)
+  }
+  return audio
+}
+
+function preloadMoveSounds() {
+  MOVE_SOUND_FILES.forEach(file => {
+    getMoveSound(file)
+  })
+}
+
+function unlockMoveSounds() {
+  if (moveSoundsUnlocked || moveSoundsUnlocking) return
+  moveSoundsUnlocking = true
+
+  const unlocks = MOVE_SOUND_FILES.map(async file => {
+    const audio = getMoveSound(file)
+    audio.muted = true
+    try {
+      await audio.play()
+      audio.pause()
+      audio.currentTime = 0
+    } catch {
+      // Ignore unlock failures; playback will still work once browser allows it.
+    } finally {
+      audio.muted = false
+    }
+  })
+
+  void Promise.allSettled(unlocks).finally(() => {
+    moveSoundsUnlocked = true
+    moveSoundsUnlocking = false
+  })
+}
+
 function playMoveSound(from: string, to: string, preMoveChess: Chess) {
   const temp = new Chess(preMoveChess.fen())
   const move = temp.move({ from, to, promotion: 'q' })
@@ -21,7 +66,10 @@ function playMoveSound(from: string, to: string, preMoveChess: Chess) {
   } else {
     file = 'move-self.mp3'
   }
-  new Audio(import.meta.env.BASE_URL + file).play().catch(() => {})
+  const audio = getMoveSound(file)
+  audio.pause()
+  audio.currentTime = 0
+  audio.play().catch(() => {})
 }
 
 function getLegalDests(chess: Chess): Map<Key, Key[]> {
@@ -51,6 +99,28 @@ interface ChessboardProps {
 
 export default function Chessboard({ fen, readonly = false, soundEnabled = true, className, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
   const [boardSize, setBoardSize] = useState(() => Math.min(400, window.innerWidth - 32))
+
+  useEffect(() => {
+    preloadMoveSounds()
+
+    const unlock = () => {
+      unlockMoveSounds()
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('touchstart', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+
+    window.addEventListener('pointerdown', unlock, { passive: true })
+    window.addEventListener('touchstart', unlock, { passive: true })
+    window.addEventListener('keydown', unlock)
+
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('touchstart', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [])
+
   useEffect(() => {
     const onResize = () => setBoardSize(Math.min(400, window.innerWidth - 32))
     window.addEventListener('resize', onResize)
