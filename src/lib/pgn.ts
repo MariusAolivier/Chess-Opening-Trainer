@@ -22,8 +22,8 @@ function lineDepth(nodes: MoveNode[]): number {
   return depth
 }
 
-/** Variations longer than this many moves get their own session; shorter ones are inlined */
-const INLINE_MAX_DEPTH = 4
+/** Variations longer than this many plies get their own session; shorter ones are inlined */
+const INLINE_MAX_DEPTH = 6
 
 export interface Chapter {
   title: string
@@ -130,6 +130,7 @@ export function extractLines(chapter: Chapter): { lineId: string; displaySan: st
   while (nodes.length > 0) {
     for (let index = 1; index < nodes.length; index += 1) {
       const alternative = nodes[index]
+      if (alternative.independent) continue
       const leaf = leafOnPrimaryPath(alternative)
       addLine(leaf.fen, alternative.san)
     }

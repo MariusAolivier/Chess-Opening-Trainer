@@ -301,7 +301,7 @@ function App() {
     }
 
     if (!visitedDetourForksRef.current.has(nextIndex)) {
-      const queuedAlternatives = mainline[nextIndex].alternatives
+      const queuedAlternatives = mainline[nextIndex].alternatives.filter(node => !node.independent)
       if (queuedAlternatives.length > 0) {
         setInlineDetour({
           forkFen: fen,
