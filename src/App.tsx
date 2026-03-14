@@ -100,6 +100,20 @@ function App() {
     setStatsKey(key => key + 1)
   }
 
+  function recordMainlineReview() {
+    if (!selectedStudyId || !selectedChapter) return
+    const chapterIndex = chapters.indexOf(selectedChapter)
+    if (chapterIndex < 0) return
+
+    const leaf = mainline[mainline.length - 1]
+    if (!leaf) return
+
+    const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((acc, value) => acc + value, 0)
+    const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
+    recordReview(chapterId(selectedStudyId, chapterIndex), leaf.fen, 'Main line', quality)
+    persistReviewData()
+  }
+
   function handleSoundToggle() {
     setSoundEnabled(previous => {
       const next = !previous
@@ -281,18 +295,19 @@ function App() {
 
     const nextIndex = moveIndex + 1
     if (nextIndex >= mainline.length) {
+      recordMainlineReview()
       setQuizDone(true)
       return
     }
 
     if (!visitedDetourForksRef.current.has(nextIndex)) {
-      const inlineAlternatives = mainline[nextIndex].alternatives.filter(node => !node.independent)
-      if (inlineAlternatives.length > 0) {
+      const queuedAlternatives = mainline[nextIndex].alternatives
+      if (queuedAlternatives.length > 0) {
         setInlineDetour({
           forkFen: fen,
           forkMainlineIndex: nextIndex,
-          pendingInlines: inlineAlternatives.slice(1),
-          detourLine: flattenDetour(inlineAlternatives[0]),
+          pendingInlines: queuedAlternatives.slice(1),
+          detourLine: flattenDetour(queuedAlternatives[0]),
           detourIndex: -1,
         })
         detourWrongCountRef.current = 0
@@ -309,19 +324,6 @@ function App() {
       return () => clearTimeout(timeout)
     }
   }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters])
-
-  useEffect(() => {
-    if (!quizDone || !selectedStudyId || !selectedChapter) return
-
-    const cid = chapterId(selectedStudyId, chapters.indexOf(selectedChapter))
-    const leaf = mainline[mainline.length - 1]
-    if (!leaf) return
-
-    const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((acc, value) => acc + value, 0)
-    const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
-    recordReview(cid, leaf.fen, 'Main line', quality)
-    persistReviewData()
-  }, [quizDone, selectedStudyId, selectedChapter, chapters, mainline])
 
   useEffect(() => {
     if (!quizDone) return
@@ -424,7 +426,9 @@ function App() {
     const chapter = study.chapters[chapterIndex]
     const cid = chapterId(study.id, chapterIndex)
 
-    extractLines(chapter).forEach(line => initScore(cid, line.lineId, line.displaySan))
+    const lines = extractLines(chapter)
+    syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
+    lines.forEach(line => initScore(cid, line.lineId, line.displaySan))
 
     loadChapters(study.chapters, study.playerColor, study.id)
     setSelectedChapter(chapter)

@@ -100,26 +100,49 @@ function pruneSingleMoveBranches(nodes: MoveNode[]): MoveNode[] {
 }
 
 /**
- * Returns all leaf lines in a chapter — one entry per end-to-end path through the tree.
- * The lineId is the leaf node's FEN (unique per line); lastMoveSan is for display.
- * This covers the mainline, every inline detour, and every independent variation.
+ * Returns all lines currently trainable by the quiz flow.
+ *
+ * The trainer follows the chapter mainline and, at each mainline fork,
+ * temporarily enters each alternative by following that branch's primary path
+ * (children[0] chain) to its leaf.
  */
 export function extractLines(chapter: Chapter): { lineId: string; displaySan: string }[] {
   const lines: { lineId: string; displaySan: string }[] = []
-  // displaySan: null on the mainline path, set to variation root san when entering a branch
-  function walk(nodes: MoveNode[], branchDisplay: string | null) {
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i]
-      // Entering a variation branch for the first time — lock in its display name
-      const thisDisplay = i > 0 ? node.san : branchDisplay
-      if (node.children.length === 0) {
-        lines.push({ lineId: node.fen, displaySan: thisDisplay ?? 'Main line' })
-      } else {
-        walk(node.children, thisDisplay)
-      }
-    }
+  const seen = new Set<string>()
+
+  function addLine(lineId: string, displaySan: string) {
+    if (seen.has(lineId)) return
+    seen.add(lineId)
+    lines.push({ lineId, displaySan })
   }
-  walk(chapter.moves, null)
+
+  function leafOnPrimaryPath(root: MoveNode): MoveNode {
+    let node = root
+    while (node.children.length > 0) {
+      node = node.children[0]
+    }
+    return node
+  }
+
+  let nodes = chapter.moves
+  let mainlineLeaf: MoveNode | null = null
+
+  while (nodes.length > 0) {
+    for (let index = 1; index < nodes.length; index += 1) {
+      const alternative = nodes[index]
+      const leaf = leafOnPrimaryPath(alternative)
+      addLine(leaf.fen, alternative.san)
+    }
+
+    const main = nodes[0]
+    mainlineLeaf = main
+    nodes = main.children
+  }
+
+  if (mainlineLeaf) {
+    addLine(mainlineLeaf.fen, 'Main line')
+  }
+
   return lines
 }
 
