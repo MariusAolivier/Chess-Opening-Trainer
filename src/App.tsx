@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chess } from 'chess.js'
 import './App.css'
 import ConfirmDialog, { type ConfirmDialogState } from './components/ConfirmDialog'
+import StreakAnimation from './components/StreakAnimation'
 import HomeView from './components/views/HomeView'
 import RepertoireView from './components/views/RepertoireView'
 import TrainingView from './components/views/TrainingView'
@@ -50,6 +51,13 @@ import {
   type MainlineMove,
 } from './lib/training'
 
+const STREAK_SHOWN_KEY = 'chess-opening-trainer:streak-shown-day'
+
+function todayDayKey(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const visitedDetourForksRef = useRef<Set<number>>(new Set())
@@ -86,6 +94,7 @@ function App() {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
   const [soundEnabled, setSoundEnabled] = useState(() => loadSoundEnabled())
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
+  const [showStreakAnimation, setShowStreakAnimation] = useState<number | null>(null)
 
   function resetTrainingProgress() {
     setMoveIndex(-1)
@@ -139,6 +148,14 @@ function App() {
     const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
     recordReview(chapterId(selectedStudyId, chapters, chapterIndex), leaf.fen, 'Main line', quality)
     void persistReviewData()
+  }
+
+  function maybeFireDailyChapterStreakAnimation() {
+    const today = todayDayKey()
+    if (localStorage.getItem(STREAK_SHOWN_KEY) === today) return
+    localStorage.setItem(STREAK_SHOWN_KEY, today)
+    const { current } = getReviewStreak()
+    setShowStreakAnimation(Math.max(1, current))
   }
 
   function handleSoundToggle() {
@@ -366,6 +383,7 @@ function App() {
 
   useEffect(() => {
     if (!quizDone) return
+    maybeFireDailyChapterStreakAnimation()
     const timeout = setTimeout(() => pickAndTrainNext(), 500)
     return () => clearTimeout(timeout)
   }, [quizDone])
@@ -718,6 +736,13 @@ function App() {
           />
         )}
       </div>
+
+      {showStreakAnimation !== null && (
+        <StreakAnimation
+          streakDays={showStreakAnimation}
+          onDone={() => setShowStreakAnimation(null)}
+        />
+      )}
 
       <ConfirmDialog
         state={confirmDialog}

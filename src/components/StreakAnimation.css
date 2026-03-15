@@ -1,0 +1,61 @@
+@keyframes sa-fade {
+  0%   { opacity: 0; }
+  12%  { opacity: 1; }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes sa-pop {
+  0%   { transform: scale(0.3); opacity: 0; }
+  55%  { transform: scale(1.12); opacity: 1; }
+  75%  { transform: scale(0.96); }
+  100% { transform: scale(1); }
+}
+
+@keyframes sa-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-10px); }
+}
+
+.sa-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  animation: sa-fade 2.8s ease forwards;
+  cursor: pointer;
+}
+
+.sa-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  animation: sa-pop 0.55s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+.sa-flame {
+  font-size: 5.5rem;
+  line-height: 1;
+  animation: sa-float 1s ease-in-out infinite;
+  filter: drop-shadow(0 0 18px rgba(255, 140, 0, 0.8));
+}
+
+.sa-count {
+  font-size: 4.5rem;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1;
+  text-shadow: 0 2px 20px rgba(255, 160, 0, 0.9);
+}
+
+.sa-label {
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: #f4d35e;
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+}
