@@ -130,7 +130,7 @@ export default function RepertoireView({
               title="Settings"
               className="rv-settings-btn"
             >
-              ⚙
+              <img src={import.meta.env.BASE_URL + 'settings-icon.png'} alt="" aria-hidden="true" className="rv-settings-icon" />
             </button>
             {showSettingsPanel && (
               <div className="rv-settings-panel">

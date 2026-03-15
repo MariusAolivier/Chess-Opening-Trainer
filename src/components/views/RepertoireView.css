@@ -134,7 +134,15 @@
   cursor: pointer;
   padding: 2px;
   line-height: 1;
-  font-size: 1.45rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rv-settings-icon {
+  width: 23px;
+  height: 23px;
+  display: block;
 }
 
 .rv-settings-panel {
