@@ -66,6 +66,11 @@ export interface Chapter {
   moves: MoveNode[]  // children of the start position
 }
 
+export interface ParsedStudy {
+  name: string
+  chapters: Chapter[]
+}
+
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 
 /**
@@ -242,4 +247,38 @@ export function parseStudy(pgn: string): { name: string | null; chapters: Chapte
   })
 
   return { name, chapters }
+}
+
+/**
+ * Parses a PGN blob that may contain chapters from multiple studies.
+ * Chapters are grouped by StudyName when present (Lichess bulk export).
+ */
+export function parseStudies(pgn: string): ParsedStudy[] {
+  const games = parseGames(pgn)
+  const chess = new Chess()
+  const grouped = new Map<string, Chapter[]>()
+
+  games.forEach(game => {
+    const tags = game.tags as Record<string, string> | undefined
+    const studyName = (tags?.StudyName ?? 'Lichess Study').trim() || 'Lichess Study'
+    const title = tags?.ChapterName ?? tags?.Event ?? 'Untitled'
+    const startFen = tags?.FEN ?? START_FEN
+
+    chess.load(startFen)
+    const chapter: Chapter = {
+      title,
+      startFen,
+      startComment: game.gameComment?.comment,
+      moves: pruneSingleMoveBranches(buildLine(startFen, game.moves as PgnMove[], chess)),
+    }
+
+    const chapters = grouped.get(studyName)
+    if (chapters) {
+      chapters.push(chapter)
+    } else {
+      grouped.set(studyName, [chapter])
+    }
+  })
+
+  return [...grouped.entries()].map(([name, chapters]) => ({ name, chapters }))
 }

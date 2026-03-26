@@ -279,6 +279,30 @@
   margin-bottom: 10px;
 }
 
+.rv-lichess-sync-btn {
+  width: 100%;
+  padding: 8px 16px;
+  cursor: pointer;
+  margin-bottom: 8px;
+  background: #163247;
+  color: #a9d7ff;
+  border: 1px solid #2e6286;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  font-weight: bold;
+}
+
+.rv-lichess-sync-btn-disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.rv-lichess-user {
+  margin-bottom: 8px;
+  font-size: 0.76rem;
+  color: #8fb7d7;
+}
+
 .rv-color-toggle-wrap {
   display: flex;
   gap: 6px;

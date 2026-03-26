@@ -6,7 +6,7 @@ import StreakAnimation from './components/StreakAnimation'
 import HomeView from './components/views/HomeView'
 import RepertoireView from './components/views/RepertoireView'
 import TrainingView from './components/views/TrainingView'
-import { parseStudy, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
+import { parseStudy, parseStudies, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
 import {
   loadStudies,
   saveStudy,
@@ -50,6 +50,14 @@ import {
   type InlineDetour,
   type MainlineMove,
 } from './lib/training'
+import {
+  beginLichessOAuthLoginAndSync,
+  clearLichessToken,
+  completeLichessOAuthFromUrl,
+  exportLichessStudiesPgn,
+  fetchLichessAccount,
+  loadLichessToken,
+} from './lib/lichess'
 
 const STREAK_SHOWN_KEY = 'chess-opening-trainer:streak-shown-day'
 
@@ -95,6 +103,8 @@ function App() {
   const [soundEnabled, setSoundEnabled] = useState(() => loadSoundEnabled())
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
   const [showStreakAnimation, setShowStreakAnimation] = useState<number | null>(null)
+  const [lichessSyncing, setLichessSyncing] = useState(false)
+  const [lichessUsername, setLichessUsername] = useState<string | null>(null)
 
   function resetTrainingProgress() {
     setMoveIndex(-1)
@@ -402,47 +412,9 @@ function App() {
         const pgn = loaded.target?.result as string
         const { name: parsedName, chapters: parsedChapters } = parseStudy(pgn)
         const studyName = parsedName ?? file.name.replace(/\.pgn$/i, '')
-        const existingStudy = storedStudies.find(study => study.name === studyName)
-        const previousSnapshot = existingStudy
-          ? JSON.stringify({ playerColor: existingStudy.playerColor, chapters: existingStudy.chapters })
-          : null
-        const stored = saveStudy(studyName, uploadColor, parsedChapters)
-        migrateLegacyChapterIdsForStudies([stored])
-        const currentSnapshot = JSON.stringify({ playerColor: stored.playerColor, chapters: stored.chapters })
-        const structureChanged = previousSnapshot === null || previousSnapshot !== currentSnapshot
+        const imported = importSingleStudy(studyName, parsedChapters, uploadColor)
 
-        let totalReset = 0
-        totalReset += pruneStudyChapterIds(stored.id, new Set(buildChapterIds(stored.id, stored.chapters)))
-        stored.chapters.forEach((chapter, chapterIndex) => {
-          const cid = chapterId(stored.id, stored.chapters, chapterIndex)
-          const lines = extractLines(chapter)
-          totalReset += syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
-          updateForkMainlines(cid, extractForkMoves(chapter))
-        })
-
-        if (!existingStudy) {
-          setResetNotice(`Uploaded "${studyName}" with ${stored.chapters.length} chapter${stored.chapters.length === 1 ? '' : 's'}.`)
-        } else if (!structureChanged && totalReset === 0) {
-          setResetNotice(`Uploaded "${studyName}". No changes were detected.`)
-        } else {
-          const resetSummary = totalReset > 0
-            ? `${totalReset} score record${totalReset === 1 ? '' : 's'} removed because lines or chapters no longer exist.`
-            : 'No score records needed cleanup.'
-          setResetNotice(`Updated "${studyName}". ${resetSummary}`)
-        }
-
-        const allStudies = loadStudies()
-        const allChaptersMap = new Map<string, string>()
-        allStudies.forEach(study => {
-          study.chapters.forEach((chapter, chapterIndex) => {
-            allChaptersMap.set(chapterId(study.id, study.chapters, chapterIndex), `${study.name} · ${chapter.title}`)
-          })
-        })
-
-        setConflictWarnings(findConflicts(allChaptersMap))
-        setStoredStudies(allStudies)
-
-        Promise.all([uploadStudy(stored), uploadScores(), uploadForkMainlines()])
+        Promise.all([uploadStudy(imported.stored), uploadScores(), uploadForkMainlines()])
           .then(() => {
             setSyncStatus('ok')
             setSyncError(null)
@@ -453,7 +425,7 @@ function App() {
             setSyncStatus('error')
             setSyncError(message)
           })
-        loadChapters(stored.chapters, uploadColor, stored.id)
+        loadChapters(imported.stored.chapters, uploadColor, imported.stored.id)
       } catch {
         setError('Failed to parse PGN file.')
       }
@@ -462,6 +434,135 @@ function App() {
     reader.readAsText(file)
     event.target.value = ''
   }
+
+  function importSingleStudy(studyName: string, parsedChapters: Chapter[], playerColor: 'white' | 'black'): { stored: StoredStudy; notice: string } {
+    const existingStudy = loadStudies().find(study => study.name === studyName)
+    const previousSnapshot = existingStudy
+      ? JSON.stringify({ playerColor: existingStudy.playerColor, chapters: existingStudy.chapters })
+      : null
+
+    const stored = saveStudy(studyName, playerColor, parsedChapters)
+    migrateLegacyChapterIdsForStudies([stored])
+
+    const currentSnapshot = JSON.stringify({ playerColor: stored.playerColor, chapters: stored.chapters })
+    const structureChanged = previousSnapshot === null || previousSnapshot !== currentSnapshot
+
+    let totalReset = 0
+    totalReset += pruneStudyChapterIds(stored.id, new Set(buildChapterIds(stored.id, stored.chapters)))
+    stored.chapters.forEach((chapter, chapterIndex) => {
+      const cid = chapterId(stored.id, stored.chapters, chapterIndex)
+      const lines = extractLines(chapter)
+      totalReset += syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
+      updateForkMainlines(cid, extractForkMoves(chapter))
+    })
+
+    let notice: string
+    if (!existingStudy) {
+      notice = `Uploaded "${studyName}" with ${stored.chapters.length} chapter${stored.chapters.length === 1 ? '' : 's'}.`
+    } else if (!structureChanged && totalReset === 0) {
+      notice = `Uploaded "${studyName}". No changes were detected.`
+    } else {
+      const resetSummary = totalReset > 0
+        ? `${totalReset} score record${totalReset === 1 ? '' : 's'} removed because lines or chapters no longer exist.`
+        : 'No score records needed cleanup.'
+      notice = `Updated "${studyName}". ${resetSummary}`
+    }
+
+    const allStudies = loadStudies()
+    const allChaptersMap = new Map<string, string>()
+    allStudies.forEach(study => {
+      study.chapters.forEach((chapter, chapterIndex) => {
+        allChaptersMap.set(chapterId(study.id, study.chapters, chapterIndex), `${study.name} · ${chapter.title}`)
+      })
+    })
+
+    setConflictWarnings(findConflicts(allChaptersMap))
+    setStoredStudies(allStudies)
+    setResetNotice(notice)
+
+    return { stored, notice }
+  }
+
+  async function runLichessSync(accessToken: string): Promise<void> {
+    const account = await fetchLichessAccount(accessToken)
+    setLichessUsername(account.username)
+
+    const exportPgn = await exportLichessStudiesPgn(accessToken, account.username)
+    const parsedStudies = parseStudies(exportPgn)
+
+    if (parsedStudies.length === 0) {
+      setResetNotice(`Connected as ${account.username}, but no studies were found to sync.`)
+      return
+    }
+
+    const uploaded: StoredStudy[] = []
+    parsedStudies.forEach(study => {
+      const imported = importSingleStudy(study.name, study.chapters, uploadColor)
+      uploaded.push(imported.stored)
+    })
+
+    await Promise.all([
+      ...uploaded.map(study => uploadStudy(study)),
+      uploadScores(),
+      uploadForkMainlines(),
+    ])
+
+    setResetNotice(`Synced ${parsedStudies.length} Lichess stud${parsedStudies.length === 1 ? 'y' : 'ies'} from ${account.username}.`)
+  }
+
+  async function handleSyncWithLichess() {
+    if (lichessSyncing) return
+    setLichessSyncing(true)
+    setError(null)
+
+    try {
+      const existingToken = loadLichessToken()
+      if (!existingToken) {
+        await beginLichessOAuthLoginAndSync()
+        return
+      }
+
+      await runLichessSync(existingToken)
+      setSyncStatus('ok')
+      setSyncError(null)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setError(message)
+      setSyncStatus('error')
+      setSyncError(message)
+    } finally {
+      setLichessSyncing(false)
+    }
+  }
+
+  useEffect(() => {
+    completeLichessOAuthFromUrl()
+      .then(result => {
+        if (!result) return
+        if (result.shouldSync) {
+          setLichessSyncing(true)
+          runLichessSync(result.accessToken)
+            .then(() => {
+              setSyncStatus('ok')
+              setSyncError(null)
+            })
+            .catch((err: unknown) => {
+              const message = err instanceof Error ? err.message : String(err)
+              if (message.includes('expired')) {
+                clearLichessToken()
+              }
+              setError(message)
+              setSyncStatus('error')
+              setSyncError(message)
+            })
+            .finally(() => setLichessSyncing(false))
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        setError(message)
+      })
+  }, [])
 
   function requestDeleteStudy(id: string) {
     const study = storedStudies.find(item => item.id === id)
@@ -684,6 +785,9 @@ function App() {
           }}
           onTrainFromSelection={trainFromSelection}
           onSetUploadColor={setUploadColor}
+          lichessSyncing={lichessSyncing}
+          lichessUsername={lichessUsername}
+          onSyncWithLichess={handleSyncWithLichess}
           onOpenUpload={() => fileInputRef.current?.click()}
           onFileChange={handleFileChange}
           onDismissConflicts={() => setConflictWarnings([])}

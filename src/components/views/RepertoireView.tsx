@@ -24,6 +24,9 @@ interface RepertoireViewProps {
   onCancelSelection: () => void
   onTrainFromSelection: () => void
   onSetUploadColor: (color: 'white' | 'black') => void
+  lichessSyncing: boolean
+  lichessUsername: string | null
+  onSyncWithLichess: () => void
   onOpenUpload: () => void
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onDismissConflicts: () => void
@@ -51,6 +54,9 @@ export default function RepertoireView({
   onCancelSelection,
   onTrainFromSelection,
   onSetUploadColor,
+  lichessSyncing,
+  lichessUsername,
+  onSyncWithLichess,
   onOpenUpload,
   onFileChange,
   onDismissConflicts,
@@ -191,6 +197,17 @@ export default function RepertoireView({
 
         <div className="rv-upload-wrap">
           <div className="rv-upload-title">Upload study</div>
+          <button
+            type="button"
+            onClick={onSyncWithLichess}
+            disabled={lichessSyncing}
+            className={`rv-lichess-sync-btn ${lichessSyncing ? 'rv-lichess-sync-btn-disabled' : ''}`}
+          >
+            {lichessSyncing ? 'Syncing Lichess...' : '↻ Sync with Lichess'}
+          </button>
+          {lichessUsername && (
+            <div className="rv-lichess-user">Connected: {lichessUsername}</div>
+          )}
           <div className="rv-color-toggle-wrap">
             <button
               onClick={() => onSetUploadColor('white')}
