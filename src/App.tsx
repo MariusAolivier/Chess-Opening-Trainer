@@ -545,28 +545,36 @@ function App() {
     }
   }
 
+  function startLichessSyncFromToken(accessToken: string) {
+    setLichessSyncing(true)
+    runLichessSync(accessToken)
+      .then(() => {
+        setSyncStatus('ok')
+        setSyncError(null)
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        if (message.includes('expired')) {
+          clearLichessToken()
+        }
+        setError(message)
+        setSyncStatus('error')
+        setSyncError(message)
+      })
+      .finally(() => setLichessSyncing(false))
+  }
+
   useEffect(() => {
     completeLichessOAuthFromUrl()
       .then(result => {
-        if (!result) return
-        if (result.shouldSync) {
-          setLichessSyncing(true)
-          runLichessSync(result.accessToken)
-            .then(() => {
-              setSyncStatus('ok')
-              setSyncError(null)
-            })
-            .catch((err: unknown) => {
-              const message = err instanceof Error ? err.message : String(err)
-              if (message.includes('expired')) {
-                clearLichessToken()
-              }
-              setError(message)
-              setSyncStatus('error')
-              setSyncError(message)
-            })
-            .finally(() => setLichessSyncing(false))
+        if (result?.shouldSync) {
+          startLichessSyncFromToken(result.accessToken)
+          return
         }
+
+        const existingToken = loadLichessToken()
+        if (!existingToken) return
+        startLichessSyncFromToken(existingToken)
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err)
