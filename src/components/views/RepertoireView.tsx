@@ -98,55 +98,58 @@ export default function RepertoireView({
             <button onClick={onGoHome} className="rv-home-btn">← Home</button>
             <div className="rv-title-wrap">
               <h2 className="rv-title">My Repertoire</h2>
-              <div ref={streakPanelRef} className="rv-streak-wrap">
-                <button onClick={() => setShowStreakPanel(open => !open)} aria-label="Toggle streak details" className="rv-streak-btn">
-                  <span aria-hidden="true" className="rv-streak-icon">🔥</span>
-                  <span>{streak.current}</span>
-                </button>
-                {showStreakPanel && (
-                  <div className="rv-streak-panel">
-                    <div className="rv-streak-row rv-streak-row-gap">
-                      <span className="rv-streak-label">Current</span>
-                      <span className="rv-streak-value rv-streak-current">{streak.current} day{streak.current === 1 ? '' : 's'}</span>
-                    </div>
-                    <div className="rv-streak-row rv-streak-row-gap">
-                      <span className="rv-streak-label">Today</span>
-                      <span className="rv-streak-value">{streak.todayCount} review{streak.todayCount === 1 ? '' : 's'}</span>
-                    </div>
-                    <div className="rv-streak-row">
-                      <span className="rv-streak-label">Best</span>
-                      <span className="rv-streak-value">{streak.best} day{streak.best === 1 ? '' : 's'}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
 
-          <div ref={settingsPanelRef} className="rv-settings-wrap">
-            <button
-              onClick={() => setShowSettingsPanel(open => !open)}
-              aria-label="Open settings"
-              title="Settings"
-              className="rv-settings-btn"
-            >
-              <img src={import.meta.env.BASE_URL + 'settings-icon.png'} alt="" aria-hidden="true" className="rv-settings-icon" />
-            </button>
-            {showSettingsPanel && (
-              <div className="rv-settings-panel">
-                <label className="rv-sound-label">
-                  Sound effects
-                  <button
-                    type="button"
-                    onClick={onToggleSound}
-                    aria-pressed={soundEnabled}
-                    className={`rv-sound-toggle ${soundEnabled ? 'rv-sound-toggle-on' : 'rv-sound-toggle-off'}`}
-                  >
-                    {soundEnabled ? 'ON' : 'OFF'}
-                  </button>
-                </label>
-              </div>
-            )}
+          <div className="rv-actions">
+            <div ref={streakPanelRef} className="rv-streak-wrap">
+              <button onClick={() => setShowStreakPanel(open => !open)} aria-label="Toggle streak details" className="rv-streak-btn">
+                <img src={import.meta.env.BASE_URL + 'streak-icon.png'} alt="" aria-hidden="true" className="rv-streak-icon" />
+                <span>{streak.current}</span>
+              </button>
+              {showStreakPanel && (
+                <div className="rv-streak-panel">
+                  <div className="rv-streak-row rv-streak-row-gap">
+                    <span className="rv-streak-label">Current</span>
+                    <span className="rv-streak-value rv-streak-current">{streak.current} day{streak.current === 1 ? '' : 's'}</span>
+                  </div>
+                  <div className="rv-streak-row rv-streak-row-gap">
+                    <span className="rv-streak-label">Today</span>
+                    <span className="rv-streak-value">{streak.todayCount} review{streak.todayCount === 1 ? '' : 's'}</span>
+                  </div>
+                  <div className="rv-streak-row">
+                    <span className="rv-streak-label">Best</span>
+                    <span className="rv-streak-value">{streak.best} day{streak.best === 1 ? '' : 's'}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div ref={settingsPanelRef} className="rv-settings-wrap">
+              <button
+                onClick={() => setShowSettingsPanel(open => !open)}
+                aria-label="Open settings"
+                title="Settings"
+                className="rv-settings-btn"
+              >
+                <img src={import.meta.env.BASE_URL + 'settings-icon.png'} alt="" aria-hidden="true" className="rv-settings-icon" />
+              </button>
+              {showSettingsPanel && (
+                <div className="rv-settings-panel">
+                  <label className="rv-sound-label">
+                    Sound effects
+                    <button
+                      type="button"
+                      onClick={onToggleSound}
+                      aria-pressed={soundEnabled}
+                      className={`rv-sound-toggle ${soundEnabled ? 'rv-sound-toggle-on' : 'rv-sound-toggle-off'}`}
+                    >
+                      {soundEnabled ? 'ON' : 'OFF'}
+                    </button>
+                  </label>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
