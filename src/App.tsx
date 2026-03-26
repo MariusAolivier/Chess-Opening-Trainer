@@ -489,14 +489,20 @@ function App() {
 
     const exportPgn = await exportLichessStudiesPgn(accessToken, account.username)
     const parsedStudies = parseStudies(exportPgn)
+    const studiesToSync = parsedStudies.filter(study => !study.name.startsWith('/'))
 
     if (parsedStudies.length === 0) {
       setResetNotice(`Connected as ${account.username}, but no studies were found to sync.`)
       return
     }
 
+    if (studiesToSync.length === 0) {
+      setResetNotice(`Connected as ${account.username}, but all studies were ignored by your '/' prefix rule.`)
+      return
+    }
+
     const uploaded: StoredStudy[] = []
-    parsedStudies.forEach(study => {
+    studiesToSync.forEach(study => {
       const imported = importSingleStudy(study.name, study.chapters, uploadColor)
       uploaded.push(imported.stored)
     })
@@ -507,7 +513,11 @@ function App() {
       uploadForkMainlines(),
     ])
 
-    setResetNotice(`Synced ${parsedStudies.length} Lichess stud${parsedStudies.length === 1 ? 'y' : 'ies'} from ${account.username}.`)
+    const ignoredCount = parsedStudies.length - studiesToSync.length
+    setResetNotice(
+      `Synced ${studiesToSync.length} Lichess stud${studiesToSync.length === 1 ? 'y' : 'ies'} from ${account.username}.` +
+      (ignoredCount > 0 ? ` Ignored ${ignoredCount} stud${ignoredCount === 1 ? 'y' : 'ies'} starting with '/'.` : '')
+    )
   }
 
   async function handleSyncWithLichess() {
