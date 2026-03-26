@@ -484,6 +484,10 @@ function App() {
   }
 
   async function runLichessSync(accessToken: string): Promise<void> {
+    function colorFromLichessStudyName(studyName: string): 'white' | 'black' {
+      return studyName.trimStart().toLocaleLowerCase().startsWith('(black)') ? 'black' : 'white'
+    }
+
     const account = await fetchLichessAccount(accessToken)
     setLichessUsername(account.username)
 
@@ -503,7 +507,7 @@ function App() {
 
     const uploaded: StoredStudy[] = []
     studiesToSync.forEach(study => {
-      const imported = importSingleStudy(study.name, study.chapters, uploadColor)
+      const imported = importSingleStudy(study.name, study.chapters, colorFromLichessStudyName(study.name))
       uploaded.push(imported.stored)
     })
 
