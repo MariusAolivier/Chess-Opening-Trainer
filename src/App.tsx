@@ -394,21 +394,26 @@ function App() {
               detourIndex: -1,
             })
           } else {
-            const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
-            if (nextQueuedRetry) {
-              detourWrongCountRef.current = 0
-              setIsReplayingVariation(true)
-              setInlineDetour({
-                forkFen: nextQueuedRetry.forkFen,
-                forkMainlineIndex: nextQueuedRetry.forkMainlineIndex,
-                pendingInlines: [],
-                detourLine: nextQueuedRetry.detourLine,
-                detourIndex: -1,
-              })
-              return
+            const replayingMainline = isReplayingVariation && moveIndex < mainline.length - 1
+            if (!replayingMainline) {
+              const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
+              if (nextQueuedRetry) {
+                detourWrongCountRef.current = 0
+                setIsReplayingVariation(true)
+                setInlineDetour({
+                  forkFen: nextQueuedRetry.forkFen,
+                  forkMainlineIndex: nextQueuedRetry.forkMainlineIndex,
+                  pendingInlines: [],
+                  detourLine: nextQueuedRetry.detourLine,
+                  detourIndex: -1,
+                })
+                return
+              }
             }
             visitedDetourForksRef.current.add(forkMainlineIndex)
-            setIsReplayingVariation(false)
+            if (!replayingMainline) {
+              setIsReplayingVariation(false)
+            }
             setInlineDetour(null)
           }
         }, 700)
@@ -478,6 +483,24 @@ function App() {
       setIsReplayingVariation(false)
       setQuizDone(true)
       return
+    }
+
+    if (isReplayingVariation && moveIndex < mainline.length - 1) {
+      const queuedRetryIndex = queuedRetryDetoursRef.current.findIndex(retry => retry.forkMainlineIndex === nextIndex)
+      if (queuedRetryIndex >= 0) {
+        const [queuedRetry] = queuedRetryDetoursRef.current.splice(queuedRetryIndex, 1)
+        if (queuedRetry) {
+          setInlineDetour({
+            forkFen: queuedRetry.forkFen,
+            forkMainlineIndex: queuedRetry.forkMainlineIndex,
+            pendingInlines: [],
+            detourLine: queuedRetry.detourLine,
+            detourIndex: -1,
+          })
+          detourWrongCountRef.current = 0
+          return
+        }
+      }
     }
 
     if (!visitedDetourForksRef.current.has(nextIndex)) {
@@ -906,19 +929,26 @@ function App() {
   }
 
   function skipReplayVariation() {
-    if (!inlineDetour || !isReplayingVariation || !selectedChapter || !selectedStudyId) return
+    if (!isReplayingVariation || !selectedChapter || !selectedStudyId) return
 
     const chapterIndex = chapters.indexOf(selectedChapter)
     if (chapterIndex < 0) return
 
-    const detourLeaf = inlineDetour.detourLine[inlineDetour.detourLine.length - 1]
-    if (!detourLeaf) return
-
-    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), detourLeaf.fen, inlineDetour.detourLine[0].san, 5, spacedRepetitionIntensity)
-    void persistReviewData()
-
     setQuizWrong(null)
     setRevealedAnswer(false)
+
+    if (inlineDetour) {
+      const detourLeaf = inlineDetour.detourLine[inlineDetour.detourLine.length - 1]
+      if (!detourLeaf) return
+
+      recordReview(chapterId(selectedStudyId, chapters, chapterIndex), detourLeaf.fen, inlineDetour.detourLine[0].san, 5, spacedRepetitionIntensity)
+      void persistReviewData()
+      visitedDetourForksRef.current.add(inlineDetour.forkMainlineIndex)
+    } else {
+      // Mainline replay is active; skipping should exit it and move to queued sideline retries (if any).
+      mainlineFailedThisRunRef.current = false
+      mainlineWrongCountRef.current = new Map()
+    }
 
     const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
     if (nextQueuedRetry) {
@@ -935,9 +965,9 @@ function App() {
       return
     }
 
-    visitedDetourForksRef.current.add(inlineDetour.forkMainlineIndex)
     setIsReplayingVariation(false)
     setInlineDetour(null)
+    setQuizDone(true)
     setBoardResetKey(key => key + 1)
   }
 
