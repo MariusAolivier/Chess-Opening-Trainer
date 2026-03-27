@@ -15,6 +15,8 @@ import {
   buildChapterIds,
   loadSoundEnabled,
   saveSoundEnabled,
+  loadRepeatFailedVariationsEnabled,
+  saveRepeatFailedVariationsEnabled,
   type StoredStudy,
   chapterId,
   legacyChapterId,
@@ -46,6 +48,7 @@ import {
   STARTING_FEN,
   findQuizStartMoveIndex,
   flattenDetour,
+  type FlatMove,
   nextPlayableDetourIndex,
   type InlineDetour,
   type MainlineMove,
@@ -69,6 +72,9 @@ function todayDayKey(): string {
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const visitedDetourForksRef = useRef<Set<number>>(new Set())
+  const queuedRetryDetoursRef = useRef<Array<{ forkFen: string; detourLine: FlatMove[]; forkMainlineIndex: number }>>([])
+  const failedDetoursForRunRef = useRef<Array<{ forkFen: string; detourLine: FlatMove[]; forkMainlineIndex: number }>>([])
+  const mainlineFailedThisRunRef = useRef(false)
   const detourWrongCountRef = useRef(0)
   const mainlineWrongCountRef = useRef<Map<number, number>>(new Map())
 
@@ -101,6 +107,7 @@ function App() {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
   const [soundEnabled, setSoundEnabled] = useState(() => loadSoundEnabled())
+  const [repeatFailedVariationsEnabled, setRepeatFailedVariationsEnabled] = useState(() => loadRepeatFailedVariationsEnabled())
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
   const [showStreakAnimation, setShowStreakAnimation] = useState<number | null>(null)
   const [lichessSyncing, setLichessSyncing] = useState(false)
@@ -115,6 +122,9 @@ function App() {
     setInlineDetour(null)
     setShowBranches(false)
     visitedDetourForksRef.current = new Set()
+    queuedRetryDetoursRef.current = []
+    failedDetoursForRunRef.current = []
+    mainlineFailedThisRunRef.current = false
     detourWrongCountRef.current = 0
     mainlineWrongCountRef.current = new Map()
   }
@@ -172,6 +182,14 @@ function App() {
     setSoundEnabled(previous => {
       const next = !previous
       saveSoundEnabled(next)
+      return next
+    })
+  }
+
+  function handleRepeatFailedVariationsToggle() {
+    setRepeatFailedVariationsEnabled(previous => {
+      const next = !previous
+      saveRepeatFailedVariationsEnabled(next)
       return next
     })
   }
@@ -315,6 +333,21 @@ function App() {
         const wrongs = detourWrongCountRef.current
         const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 3 : 1
 
+        if (repeatFailedVariationsEnabled && wrongs > 0) {
+          const retryKey = detourLine[detourLine.length - 1]?.fen ?? detourLine[0]?.fen
+          const alreadyQueued = failedDetoursForRunRef.current.some(retry => {
+            const existingKey = retry.detourLine[retry.detourLine.length - 1]?.fen ?? retry.detourLine[0]?.fen
+            return existingKey === retryKey
+          })
+          if (!alreadyQueued) {
+            failedDetoursForRunRef.current.push({
+              forkFen,
+              forkMainlineIndex,
+              detourLine: [...detourLine],
+            })
+          }
+        }
+
         if (selectedStudyId && selectedChapter) {
           const chapterIndex = chapters.indexOf(selectedChapter)
           const detourLeaf = detourLine[detourLine.length - 1]
@@ -336,6 +369,18 @@ function App() {
               detourIndex: -1,
             })
           } else {
+            const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
+            if (nextQueuedRetry) {
+              detourWrongCountRef.current = 0
+              setInlineDetour({
+                forkFen: nextQueuedRetry.forkFen,
+                forkMainlineIndex: nextQueuedRetry.forkMainlineIndex,
+                pendingInlines: [],
+                detourLine: nextQueuedRetry.detourLine,
+                detourIndex: -1,
+              })
+              return
+            }
             visitedDetourForksRef.current.add(forkMainlineIndex)
             setInlineDetour(null)
           }
@@ -362,6 +407,45 @@ function App() {
     const nextIndex = moveIndex + 1
     if (nextIndex >= mainline.length) {
       recordMainlineReview()
+
+      const hasMainlineFailure = repeatFailedVariationsEnabled && mainlineFailedThisRunRef.current
+      const postponedSidelineRetries = repeatFailedVariationsEnabled ? [...queuedRetryDetoursRef.current] : []
+      const failedSidelineRetries = repeatFailedVariationsEnabled ? [...failedDetoursForRunRef.current] : []
+      const detoursToRetry = [...postponedSidelineRetries, ...failedSidelineRetries]
+
+      queuedRetryDetoursRef.current = []
+      failedDetoursForRunRef.current = []
+
+      if (repeatFailedVariationsEnabled && (hasMainlineFailure || detoursToRetry.length > 0)) {
+        mainlineFailedThisRunRef.current = false
+        mainlineWrongCountRef.current = new Map()
+        setQuizWrong(null)
+        setRevealedAnswer(false)
+
+        if (hasMainlineFailure) {
+          queuedRetryDetoursRef.current = detoursToRetry
+          setInlineDetour(null)
+          setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
+          setBoardResetKey(key => key + 1)
+          return
+        }
+
+        const [firstRetry, ...restRetries] = detoursToRetry
+        if (firstRetry) {
+          queuedRetryDetoursRef.current = restRetries
+          detourWrongCountRef.current = 0
+          setInlineDetour({
+            forkFen: firstRetry.forkFen,
+            forkMainlineIndex: firstRetry.forkMainlineIndex,
+            pendingInlines: [],
+            detourLine: firstRetry.detourLine,
+            detourIndex: -1,
+          })
+          setBoardResetKey(key => key + 1)
+          return
+        }
+      }
+
       setQuizDone(true)
       return
     }
@@ -389,7 +473,7 @@ function App() {
       }, 700)
       return () => clearTimeout(timeout)
     }
-  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters])
+  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters, repeatFailedVariationsEnabled])
 
   useEffect(() => {
     if (!quizDone) return
@@ -757,6 +841,7 @@ function App() {
       return true
     }
 
+    mainlineFailedThisRunRef.current = true
     mainlineWrongCountRef.current.set(nextIndex, (mainlineWrongCountRef.current.get(nextIndex) ?? 0) + 1)
     setQuizWrong(mainline[nextIndex].san)
     setWrongGuessTick(tick => tick + 1)
@@ -770,6 +855,7 @@ function App() {
       detourWrongCountRef.current = 99
     } else {
       const nextIndex = moveIndex + 1
+      mainlineFailedThisRunRef.current = true
       mainlineWrongCountRef.current.set(nextIndex, 99)
     }
   }
@@ -791,6 +877,7 @@ function App() {
           selectedChapterIds={selectedChapterIds}
           uploadColor={uploadColor}
           soundEnabled={soundEnabled}
+          repeatFailedVariationsEnabled={repeatFailedVariationsEnabled}
           error={error}
           resetNotice={resetNotice}
           conflictWarnings={conflictWarnings}
@@ -814,6 +901,7 @@ function App() {
           onFileChange={handleFileChange}
           onDismissConflicts={() => setConflictWarnings([])}
           onToggleSound={handleSoundToggle}
+          onToggleRepeatFailedVariations={handleRepeatFailedVariationsToggle}
           fileInputRef={fileInputRef}
         />
       )}

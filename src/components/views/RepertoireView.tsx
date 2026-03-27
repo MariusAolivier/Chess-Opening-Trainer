@@ -11,6 +11,7 @@ interface RepertoireViewProps {
   selectedChapterIds: Set<string>
   uploadColor: 'white' | 'black'
   soundEnabled: boolean
+  repeatFailedVariationsEnabled: boolean
   error: string | null
   resetNotice: string | null
   conflictWarnings: ConflictInfo[]
@@ -31,6 +32,7 @@ interface RepertoireViewProps {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onDismissConflicts: () => void
   onToggleSound: () => void
+  onToggleRepeatFailedVariations: () => void
   fileInputRef: React.RefObject<HTMLInputElement | null>
 }
 
@@ -41,6 +43,7 @@ export default function RepertoireView({
   selectedChapterIds,
   uploadColor,
   soundEnabled,
+  repeatFailedVariationsEnabled,
   error,
   resetNotice,
   conflictWarnings,
@@ -61,6 +64,7 @@ export default function RepertoireView({
   onFileChange,
   onDismissConflicts,
   onToggleSound,
+  onToggleRepeatFailedVariations,
   fileInputRef,
 }: RepertoireViewProps) {
   const [showStreakPanel, setShowStreakPanel] = useState(false)
@@ -151,6 +155,17 @@ export default function RepertoireView({
                       className={`rv-sound-toggle ${soundEnabled ? 'rv-sound-toggle-on' : 'rv-sound-toggle-off'}`}
                     >
                       {soundEnabled ? 'ON' : 'OFF'}
+                    </button>
+                  </label>
+                  <label className="rv-sound-label">
+                    Repeat failed variations
+                    <button
+                      type="button"
+                      onClick={onToggleRepeatFailedVariations}
+                      aria-pressed={repeatFailedVariationsEnabled}
+                      className={`rv-sound-toggle ${repeatFailedVariationsEnabled ? 'rv-sound-toggle-on' : 'rv-sound-toggle-off'}`}
+                    >
+                      {repeatFailedVariationsEnabled ? 'ON' : 'OFF'}
                     </button>
                   </label>
                 </div>

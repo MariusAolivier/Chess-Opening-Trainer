@@ -10,6 +10,7 @@ export interface StoredStudy {
 
 const KEY = 'chess-opening-trainer:studies'
 const SOUND_ENABLED_KEY = 'chess-opening-trainer:sound-enabled'
+const REPEAT_FAILED_VARIATIONS_KEY = 'chess-opening-trainer:repeat-failed-variations'
 
 function normalizeStudyName(name: string): string {
   return name.trim().toLocaleLowerCase()
@@ -27,6 +28,20 @@ export function loadSoundEnabled(): boolean {
 
 export function saveSoundEnabled(enabled: boolean): void {
   localStorage.setItem(SOUND_ENABLED_KEY, String(enabled))
+}
+
+export function loadRepeatFailedVariationsEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(REPEAT_FAILED_VARIATIONS_KEY)
+    if (raw === null) return true
+    return raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+export function saveRepeatFailedVariationsEnabled(enabled: boolean): void {
+  localStorage.setItem(REPEAT_FAILED_VARIATIONS_KEY, String(enabled))
 }
 
 export function loadStudies(): StoredStudy[] {
