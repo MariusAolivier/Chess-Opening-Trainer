@@ -600,12 +600,6 @@ function App() {
       uploadScores(),
       uploadForkMainlines(),
     ])
-
-    const ignoredCount = parsedStudies.length - studiesToSync.length
-    setResetNotice(
-      `Synced ${studiesToSync.length} Lichess stud${studiesToSync.length === 1 ? 'y' : 'ies'} from ${account.username}.` +
-      (ignoredCount > 0 ? ` Ignored ${ignoredCount} stud${ignoredCount === 1 ? 'y' : 'ies'} starting with '/'.` : '')
-    )
   }
 
   async function handleSyncWithLichess() {
