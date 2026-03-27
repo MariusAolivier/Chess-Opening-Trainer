@@ -4,36 +4,27 @@ import { loadScores, type ScoreRecord } from '../lib/scores'
 import { chapterId, type StoredStudy } from '../lib/storage'
 import './RepertoirePanel.css'
 
-function reviewedAtTimestamp(score: ScoreRecord): number | null {
-  if (typeof score.lastReviewedAt === 'string') {
-    const parsed = Date.parse(score.lastReviewedAt)
-    if (!Number.isNaN(parsed)) return parsed
-  }
+function formatDueIn(scores: ScoreRecord[], now: number): string {
+  const reviewedScores = scores.filter(score => {
+    if (score.interval > 0) return true
+    if (typeof score.lastReviewedAt === 'string' && !Number.isNaN(Date.parse(score.lastReviewedAt))) return true
+    return false
+  })
 
-  if (score.interval > 0) {
+  if (reviewedScores.length === 0) return 'not reviewed yet'
+
+  const nextDue = reviewedScores.reduce<number | null>((min, score) => {
     const due = Date.parse(score.dueDate)
-    if (!Number.isNaN(due)) {
-      return due - score.interval * 86_400_000
-    }
-  }
-
-  return null
-}
-
-function formatLastReviewed(scores: ScoreRecord[]): string {
-  const latest = scores.reduce<number | null>((max, score) => {
-    const reviewedAt = reviewedAtTimestamp(score)
-    if (reviewedAt === null) return max
-    if (max === null || reviewedAt > max) return reviewedAt
-    return max
+    if (Number.isNaN(due)) return min
+    if (min === null || due < min) return due
+    return min
   }, null)
 
-  if (latest === null) return 'Never'
-  return new Date(latest).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })
+  if (nextDue === null) return 'not reviewed yet'
+
+  const days = Math.max(0, Math.ceil((nextDue - now) / 86_400_000))
+  if (days === 0) return 'due now'
+  return `due in ${days} day${days === 1 ? '' : 's'}`
 }
 
 interface RepertoirePanelProps {
@@ -158,7 +149,7 @@ export default function RepertoirePanel({
                   const chapterDue = chapterScores.filter(score => new Date(score.dueDate).getTime() <= now).length
                   const chapterPercent = chapterTotalMoves > 0 ? Math.round((chapterCompletedMoves / chapterTotalMoves) * 100) : 0
                   const chapterSelected = selectedChapterIds.has(cid)
-                  const chapterLastReviewed = formatLastReviewed(chapterScores)
+                  const chapterDueIn = formatDueIn(chapterScores, now)
 
                   return (
                     <div key={chapterIndex} className="rp-chapter-shell">
@@ -177,7 +168,7 @@ export default function RepertoirePanel({
                         )}
                         <span className="rp-chapter-labels">
                           <span className="rp-chapter-title">{chapter.title}</span>
-                          <span className="rp-chapter-last-reviewed">Last reviewed: {chapterLastReviewed}</span>
+                          <span className="rp-chapter-last-reviewed">{chapterDueIn}</span>
                         </span>
                         {chapterDue > 0 && (
                           <span className="rp-chapter-due">
