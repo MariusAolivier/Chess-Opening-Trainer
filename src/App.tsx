@@ -535,7 +535,7 @@ function App() {
     totalReset += pruneStudyChapterIds(stored.id, new Set(buildChapterIds(stored.id, stored.chapters)))
     stored.chapters.forEach((chapter, chapterIndex) => {
       const cid = chapterId(stored.id, stored.chapters, chapterIndex)
-      const lines = extractLines(chapter)
+      const lines = extractLines(chapter, stored.playerColor)
       totalReset += syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
       updateForkMainlines(cid, extractForkMoves(chapter))
     })
@@ -730,7 +730,7 @@ function App() {
     const chapter = study.chapters[chapterIndex]
     const cid = chapterId(study.id, study.chapters, chapterIndex)
 
-    const lines = extractLines(chapter)
+    const lines = extractLines(chapter, study.playerColor)
     syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
     lines.forEach(line => initScore(cid, line.lineId, line.displaySan))
 

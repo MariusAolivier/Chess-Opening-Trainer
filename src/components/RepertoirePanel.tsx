@@ -86,7 +86,7 @@ export default function RepertoirePanel({
 
         study.chapters.forEach((chapter, chapterIndex) => {
           const cid = chapterId(study.id, study.chapters, chapterIndex)
-          const chapterLines = extractTrainableLines(chapter)
+          const chapterLines = extractTrainableLines(chapter, study.playerColor)
           const chapterScores = scoresByChapter.get(cid) ?? []
 
           totalMoves += chapterLines.reduce((sum, line) => sum + line.plyCount, 0)
@@ -149,7 +149,7 @@ export default function RepertoirePanel({
               <div className="rp-chapters-wrap">
                 {study.chapters.map((chapter, chapterIndex) => {
                   const cid = chapterId(study.id, study.chapters, chapterIndex)
-                  const chapterLines = extractTrainableLines(chapter)
+                  const chapterLines = extractTrainableLines(chapter, study.playerColor)
                   const chapterScores = scoresByChapter.get(cid) ?? []
                   const chapterTotalMoves = chapterLines.reduce((sum, line) => sum + line.plyCount, 0)
                   const chapterCompletedMoves = chapterLines

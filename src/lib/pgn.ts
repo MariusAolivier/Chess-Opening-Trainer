@@ -153,9 +153,10 @@ export interface TrainableLine {
   plyCount: number
 }
 
-export function extractTrainableLines(chapter: Chapter): TrainableLine[] {
+export function extractTrainableLines(chapter: Chapter, playerColor?: 'white' | 'black'): TrainableLine[] {
   const lines: TrainableLine[] = []
   const seen = new Set<string>()
+  const userColor = playerColor === 'white' ? 'w' : playerColor === 'black' ? 'b' : null
 
   function addLine(lineId: string, displaySan: string, plyCount: number) {
     if (seen.has(lineId)) return
@@ -173,17 +174,21 @@ export function extractTrainableLines(chapter: Chapter): TrainableLine[] {
 
   let nodes = chapter.moves
   let mainlineLeaf: MoveNode | null = null
+  let currentFen = chapter.startFen
 
   while (nodes.length > 0) {
+    const sideToMove = currentFen.split(' ')[1] as 'w' | 'b'
     for (let index = 1; index < nodes.length; index += 1) {
       const alternative = nodes[index]
       if (alternative.independent) continue
+      if (userColor !== null && sideToMove === userColor) continue
       const leaf = leafOnPrimaryPath(alternative)
       addLine(leaf.fen, alternative.san, 1 + lineDepth(alternative.children))
     }
 
     const main = nodes[0]
     mainlineLeaf = main
+    currentFen = main.fen
     nodes = main.children
   }
 
@@ -194,8 +199,8 @@ export function extractTrainableLines(chapter: Chapter): TrainableLine[] {
   return lines
 }
 
-export function extractLines(chapter: Chapter): { lineId: string; displaySan: string }[] {
-  return extractTrainableLines(chapter).map(({ lineId, displaySan }) => ({ lineId, displaySan }))
+export function extractLines(chapter: Chapter, playerColor?: 'white' | 'black'): { lineId: string; displaySan: string }[] {
+  return extractTrainableLines(chapter, playerColor).map(({ lineId, displaySan }) => ({ lineId, displaySan }))
 }
 
 /**
