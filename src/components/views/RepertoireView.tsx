@@ -147,25 +147,27 @@ export default function RepertoireView({
               {showSettingsPanel && (
                 <div className="rv-settings-panel">
                   <label className="rv-sound-label">
-                    Sound effects
+                    <span className="rv-setting-text">Sound effects</span>
                     <button
                       type="button"
                       onClick={onToggleSound}
                       aria-pressed={soundEnabled}
+                      aria-label={`Sound effects ${soundEnabled ? 'on' : 'off'}`}
                       className={`rv-sound-toggle ${soundEnabled ? 'rv-sound-toggle-on' : 'rv-sound-toggle-off'}`}
                     >
-                      {soundEnabled ? 'ON' : 'OFF'}
+                      <span className="rv-sound-toggle-thumb" />
                     </button>
                   </label>
                   <label className="rv-sound-label">
-                    Repeat failed variations
+                    <span className="rv-setting-text">Repeat failed variations</span>
                     <button
                       type="button"
                       onClick={onToggleRepeatFailedVariations}
                       aria-pressed={repeatFailedVariationsEnabled}
+                      aria-label={`Repeat failed variations ${repeatFailedVariationsEnabled ? 'on' : 'off'}`}
                       className={`rv-sound-toggle ${repeatFailedVariationsEnabled ? 'rv-sound-toggle-on' : 'rv-sound-toggle-off'}`}
                     >
-                      {repeatFailedVariationsEnabled ? 'ON' : 'OFF'}
+                      <span className="rv-sound-toggle-thumb" />
                     </button>
                   </label>
                 </div>
