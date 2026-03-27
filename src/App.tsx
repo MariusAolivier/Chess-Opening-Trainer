@@ -585,7 +585,13 @@ function App() {
 
     const exportPgn = await exportLichessStudiesPgn(accessToken, account.username)
     const parsedStudies = parseStudies(exportPgn)
-    const studiesToSync = parsedStudies.filter(study => !study.name.startsWith('/'))
+    const studiesToSync = parsedStudies
+      .filter(study => !study.name.startsWith('/'))
+      .map(study => ({
+        ...study,
+        chapters: study.chapters.filter(chapter => !chapter.title.trimStart().startsWith('***')),
+      }))
+      .filter(study => study.chapters.length > 0)
 
     if (parsedStudies.length === 0) {
       return
