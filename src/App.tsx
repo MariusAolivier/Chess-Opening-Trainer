@@ -747,17 +747,56 @@ function App() {
 
     const scores = loadScores()
     const now = Date.now()
-    const allEntries: Array<{ study: StoredStudy; chapterIndex: number }> = []
+    const allEntries: Array<{ study: StoredStudy; chapterIndex: number; cid: string }> = []
 
     storedStudies.forEach(study => {
       study.chapters.forEach((_, chapterIndex) => {
         const cid = chapterId(study.id, study.chapters, chapterIndex)
         if (selectedChapterIds.size > 0 && !selectedChapterIds.has(cid)) return
-        allEntries.push({ study, chapterIndex })
+        allEntries.push({ study, chapterIndex, cid })
       })
     })
 
     if (allEntries.length === 0) return
+
+    if (selectedChapterIds.size > 0) {
+      const pickOrder = allEntries
+        .map(entry => {
+          const chapterScores = scores.filter(score => score.chapterId === entry.cid)
+          const hasReviewed = chapterScores.some(score => Boolean(score.lastReviewedAt))
+          const nextDueAt = chapterScores.reduce((earliest, score) => {
+            const dueAt = Date.parse(score.dueDate)
+            if (Number.isNaN(dueAt)) return earliest
+            return Math.min(earliest, dueAt)
+          }, Number.POSITIVE_INFINITY)
+
+          const priority = !hasReviewed
+            ? 0
+            : nextDueAt <= now
+              ? 1
+              : 2
+
+          return {
+            entry,
+            priority,
+            nextDueAt,
+            studyName: entry.study.name.toLocaleLowerCase(),
+            chapterTitle: (entry.study.chapters[entry.chapterIndex]?.title ?? '').toLocaleLowerCase(),
+          }
+        })
+        .sort((left, right) => {
+          if (left.priority !== right.priority) return left.priority - right.priority
+          if (left.nextDueAt !== right.nextDueAt) return left.nextDueAt - right.nextDueAt
+          if (left.studyName !== right.studyName) return left.studyName.localeCompare(right.studyName)
+          if (left.chapterTitle !== right.chapterTitle) return left.chapterTitle.localeCompare(right.chapterTitle)
+          return left.entry.cid.localeCompare(right.entry.cid)
+        })
+
+      const picked = pickOrder[0]?.entry
+      if (!picked) return
+      trainChapter(picked.study, picked.chapterIndex)
+      return
+    }
 
     const dueEntries = allEntries.filter(({ study, chapterIndex }) => {
       const cid = chapterId(study.id, study.chapters, chapterIndex)
