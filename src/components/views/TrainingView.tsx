@@ -26,6 +26,7 @@ interface TrainingViewProps {
   mainline: MainlineMove[]
   currentFen?: string
   soundEnabled: boolean
+  commentsVisible: boolean
   activePlayerColor: 'white' | 'black'
   boardResetKey: number
   branchForks: BranchFork[]
@@ -50,6 +51,7 @@ export default function TrainingView({
   mainline,
   currentFen,
   soundEnabled,
+  commentsVisible,
   activePlayerColor,
   boardResetKey,
   branchForks,
@@ -92,6 +94,17 @@ export default function TrainingView({
       fenBefore = line[index].fen
     }
     return count
+  }
+
+  function moveMoverSide(
+    startFen: string,
+    line: Array<{ fen: string }>,
+    moveAtIndex: number,
+  ): 'w' | 'b' | null {
+    if (moveAtIndex < 0 || moveAtIndex >= line.length) return null
+    const fenBeforeMove = moveAtIndex === 0 ? startFen : line[moveAtIndex - 1]?.fen
+    if (!fenBeforeMove) return null
+    return fenBeforeMove.split(' ')[1] as 'w' | 'b'
   }
 
   const mainlineTotalForUser = selectedChapter
@@ -203,12 +216,20 @@ export default function TrainingView({
         )}
       </div>
 
-      {selectedChapter && (() => {
+      {commentsVisible && selectedChapter && (() => {
         const comment = inlineDetour && inlineDetour.detourIndex >= 0
-          ? inlineDetour.detourLine[inlineDetour.detourIndex]?.comment
+          ? (() => {
+            const mover = moveMoverSide(inlineDetour.forkFen, inlineDetour.detourLine, inlineDetour.detourIndex)
+            if (mover === userColor) return null
+            return inlineDetour.detourLine[inlineDetour.detourIndex]?.comment
+          })()
           : moveIndex === -1
             ? selectedChapter.startComment
-            : mainline[moveIndex]?.comment
+            : (() => {
+              const mover = moveMoverSide(selectedChapter.startFen, mainline, moveIndex)
+              if (mover === userColor) return null
+              return mainline[moveIndex]?.comment
+            })()
         if (!comment) return null
         return (
           <div className="tv-comment">

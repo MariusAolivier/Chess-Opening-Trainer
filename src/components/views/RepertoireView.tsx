@@ -13,6 +13,7 @@ interface RepertoireViewProps {
   soundEnabled: boolean
   repeatFailedVariationsEnabled: boolean
   spacedRepetitionIntensity: 1 | 2 | 3 | 4 | 5
+  commentsVisible: boolean
   error: string | null
   conflictWarnings: ConflictInfo[]
   onGoHome: () => void
@@ -34,6 +35,7 @@ interface RepertoireViewProps {
   onToggleSound: () => void
   onToggleRepeatFailedVariations: () => void
   onSetSpacedRepetitionIntensity: (value: number) => void
+  onToggleCommentsVisible: () => void
   fileInputRef: React.RefObject<HTMLInputElement | null>
 }
 
@@ -46,6 +48,7 @@ export default function RepertoireView({
   soundEnabled,
   repeatFailedVariationsEnabled,
   spacedRepetitionIntensity,
+  commentsVisible,
   error,
   conflictWarnings,
   onGoHome,
@@ -67,6 +70,7 @@ export default function RepertoireView({
   onToggleSound,
   onToggleRepeatFailedVariations,
   onSetSpacedRepetitionIntensity,
+  onToggleCommentsVisible,
   fileInputRef,
 }: RepertoireViewProps) {
   const [showStreakPanel, setShowStreakPanel] = useState(false)
@@ -168,6 +172,18 @@ export default function RepertoireView({
                       aria-pressed={repeatFailedVariationsEnabled}
                       aria-label={`Repeat failed variations ${repeatFailedVariationsEnabled ? 'on' : 'off'}`}
                       className={`rv-sound-toggle ${repeatFailedVariationsEnabled ? 'rv-sound-toggle-on' : 'rv-sound-toggle-off'}`}
+                    >
+                      <span className="rv-sound-toggle-thumb" />
+                    </button>
+                  </label>
+                  <label className="rv-sound-label">
+                    <span className="rv-setting-text">Show comments</span>
+                    <button
+                      type="button"
+                      onClick={onToggleCommentsVisible}
+                      aria-pressed={commentsVisible}
+                      aria-label={`Show comments ${commentsVisible ? 'on' : 'off'}`}
+                      className={`rv-sound-toggle ${commentsVisible ? 'rv-sound-toggle-on' : 'rv-sound-toggle-off'}`}
                     >
                       <span className="rv-sound-toggle-thumb" />
                     </button>

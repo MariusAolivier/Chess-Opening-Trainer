@@ -12,6 +12,7 @@ const KEY = 'chess-opening-trainer:studies'
 const SOUND_ENABLED_KEY = 'chess-opening-trainer:sound-enabled'
 const REPEAT_FAILED_VARIATIONS_KEY = 'chess-opening-trainer:repeat-failed-variations'
 const SPACED_REPETITION_INTENSITY_KEY = 'chess-opening-trainer:spaced-repetition-intensity'
+const COMMENTS_VISIBLE_KEY = 'chess-opening-trainer:comments-visible'
 
 function clampIntensity(value: number): 1 | 2 | 3 | 4 | 5 {
   if (value <= 1) return 1
@@ -64,6 +65,20 @@ export function loadSpacedRepetitionIntensity(): 1 | 2 | 3 | 4 | 5 {
 
 export function saveSpacedRepetitionIntensity(value: number): void {
   localStorage.setItem(SPACED_REPETITION_INTENSITY_KEY, String(clampIntensity(value)))
+}
+
+export function loadCommentsVisible(): boolean {
+  try {
+    const raw = localStorage.getItem(COMMENTS_VISIBLE_KEY)
+    if (raw === null) return true
+    return raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+export function saveCommentsVisible(visible: boolean): void {
+  localStorage.setItem(COMMENTS_VISIBLE_KEY, String(visible))
 }
 
 export function loadStudies(): StoredStudy[] {

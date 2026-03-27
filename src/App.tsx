@@ -19,6 +19,8 @@ import {
   saveRepeatFailedVariationsEnabled,
   loadSpacedRepetitionIntensity,
   saveSpacedRepetitionIntensity,
+  loadCommentsVisible,
+  saveCommentsVisible,
   type StoredStudy,
   chapterId,
   legacyChapterId,
@@ -110,6 +112,7 @@ function App() {
   const [soundEnabled, setSoundEnabled] = useState(() => loadSoundEnabled())
   const [repeatFailedVariationsEnabled, setRepeatFailedVariationsEnabled] = useState(() => loadRepeatFailedVariationsEnabled())
   const [spacedRepetitionIntensity, setSpacedRepetitionIntensity] = useState<1 | 2 | 3 | 4 | 5>(() => loadSpacedRepetitionIntensity())
+  const [commentsVisible, setCommentsVisible] = useState(() => loadCommentsVisible())
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
   const [showStreakAnimation, setShowStreakAnimation] = useState<number | null>(null)
   const [lichessSyncing, setLichessSyncing] = useState(false)
@@ -200,6 +203,14 @@ function App() {
     const clamped = Math.max(1, Math.min(5, Math.round(value))) as 1 | 2 | 3 | 4 | 5
     setSpacedRepetitionIntensity(clamped)
     saveSpacedRepetitionIntensity(clamped)
+  }
+
+  function handleCommentsVisibleToggle() {
+    setCommentsVisible(previous => {
+      const next = !previous
+      saveCommentsVisible(next)
+      return next
+    })
   }
 
   function loadChapters(chaptersToLoad: Chapter[], playerColor: 'white' | 'black' = 'white', studyId?: string) {
@@ -856,6 +867,7 @@ function App() {
           soundEnabled={soundEnabled}
           repeatFailedVariationsEnabled={repeatFailedVariationsEnabled}
           spacedRepetitionIntensity={spacedRepetitionIntensity}
+          commentsVisible={commentsVisible}
           error={error}
           conflictWarnings={conflictWarnings}
           onGoHome={handleRepertoireGoHome}
@@ -880,6 +892,7 @@ function App() {
           onToggleSound={handleSoundToggle}
           onToggleRepeatFailedVariations={handleRepeatFailedVariationsToggle}
           onSetSpacedRepetitionIntensity={handleSpacedRepetitionIntensityChange}
+          onToggleCommentsVisible={handleCommentsVisibleToggle}
           fileInputRef={fileInputRef}
         />
       )}
@@ -914,6 +927,7 @@ function App() {
             mainline={mainline}
             currentFen={currentFen}
             soundEnabled={soundEnabled}
+            commentsVisible={commentsVisible}
             activePlayerColor={activePlayerColor}
             boardResetKey={boardResetKey}
             branchForks={branchForks}
