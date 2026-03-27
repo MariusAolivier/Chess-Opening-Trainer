@@ -266,6 +266,18 @@
   color: #8ea6d6;
 }
 
+.rv-reset-scores-btn {
+  width: 100%;
+  border: 1px solid #7c3a3a;
+  background: #3a1f1f;
+  color: #ffb7b7;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
 .rv-empty-note {
   color: #888;
   font-size: 0.9rem;

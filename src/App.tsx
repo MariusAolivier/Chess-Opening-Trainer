@@ -29,6 +29,9 @@ import {
   loadScores,
   recordReview,
   initScore,
+  importAllScores,
+  importForkMainlines,
+  importReviewActivity,
   pruneStudyChapterIds,
   remapChapterIds,
   syncChapterLines,
@@ -899,6 +902,32 @@ function App() {
     setView('home')
   }
 
+  function requestResetScores() {
+    setConfirmDialog({
+      title: 'Reset all scores?',
+      message: 'This will permanently clear all review scores, due dates, streak activity, and replay tracking data for every chapter.',
+      confirmLabel: 'Reset scores',
+      action: () => {
+        importAllScores([])
+        importForkMainlines([])
+        importReviewActivity([])
+        setStatsKey(key => key + 1)
+
+        Promise.all([uploadScores(), uploadForkMainlines(), uploadReviewActivity()])
+          .then(() => {
+            setSyncStatus('ok')
+            setSyncError(null)
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err)
+            console.error('[sync] reset scores sync failed:', err)
+            setSyncStatus('error')
+            setSyncError(message)
+          })
+      },
+    })
+  }
+
   return (
     <>
       {view === 'repertoire' && (
@@ -937,6 +966,7 @@ function App() {
           onToggleRepeatFailedVariations={handleRepeatFailedVariationsToggle}
           onSetSpacedRepetitionIntensity={handleSpacedRepetitionIntensityChange}
           onToggleCommentsVisible={handleCommentsVisibleToggle}
+          onRequestResetScores={requestResetScores}
           fileInputRef={fileInputRef}
         />
       )}

@@ -36,6 +36,7 @@ interface RepertoireViewProps {
   onToggleRepeatFailedVariations: () => void
   onSetSpacedRepetitionIntensity: (value: number) => void
   onToggleCommentsVisible: () => void
+  onRequestResetScores: () => void
   fileInputRef: React.RefObject<HTMLInputElement | null>
 }
 
@@ -71,6 +72,7 @@ export default function RepertoireView({
   onToggleRepeatFailedVariations,
   onSetSpacedRepetitionIntensity,
   onToggleCommentsVisible,
+  onRequestResetScores,
   fileInputRef,
 }: RepertoireViewProps) {
   const [showStreakPanel, setShowStreakPanel] = useState(false)
@@ -209,6 +211,13 @@ export default function RepertoireView({
                       <span>Intense</span>
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={onRequestResetScores}
+                    className="rv-reset-scores-btn"
+                  >
+                    Reset scores
+                  </button>
                 </div>
               )}
             </div>
