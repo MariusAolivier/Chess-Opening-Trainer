@@ -17,6 +17,8 @@ import {
   saveSoundEnabled,
   loadRepeatFailedVariationsEnabled,
   saveRepeatFailedVariationsEnabled,
+  loadSpacedRepetitionIntensity,
+  saveSpacedRepetitionIntensity,
   type StoredStudy,
   chapterId,
   legacyChapterId,
@@ -96,7 +98,6 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [showBranches, setShowBranches] = useState(false)
   const [conflictWarnings, setConflictWarnings] = useState<ConflictInfo[]>([])
-  const [resetNotice, setResetNotice] = useState<string | null>(null)
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
 
@@ -108,6 +109,7 @@ function App() {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
   const [soundEnabled, setSoundEnabled] = useState(() => loadSoundEnabled())
   const [repeatFailedVariationsEnabled, setRepeatFailedVariationsEnabled] = useState(() => loadRepeatFailedVariationsEnabled())
+  const [spacedRepetitionIntensity, setSpacedRepetitionIntensity] = useState<1 | 2 | 3 | 4 | 5>(() => loadSpacedRepetitionIntensity())
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
   const [showStreakAnimation, setShowStreakAnimation] = useState<number | null>(null)
   const [lichessSyncing, setLichessSyncing] = useState(false)
@@ -166,7 +168,7 @@ function App() {
 
     const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((acc, value) => acc + value, 0)
     const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
-    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), leaf.fen, 'Main line', quality)
+    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), leaf.fen, 'Main line', quality, spacedRepetitionIntensity)
     void persistReviewData()
   }
 
@@ -192,6 +194,12 @@ function App() {
       saveRepeatFailedVariationsEnabled(next)
       return next
     })
+  }
+
+  function handleSpacedRepetitionIntensityChange(value: number) {
+    const clamped = Math.max(1, Math.min(5, Math.round(value))) as 1 | 2 | 3 | 4 | 5
+    setSpacedRepetitionIntensity(clamped)
+    saveSpacedRepetitionIntensity(clamped)
   }
 
   function loadChapters(chaptersToLoad: Chapter[], playerColor: 'white' | 'black' = 'white', studyId?: string) {
@@ -351,7 +359,7 @@ function App() {
         if (selectedStudyId && selectedChapter) {
           const chapterIndex = chapters.indexOf(selectedChapter)
           const detourLeaf = detourLine[detourLine.length - 1]
-          recordReview(chapterId(selectedStudyId, chapters, chapterIndex), detourLeaf.fen, detourLine[0].san, quality)
+          recordReview(chapterId(selectedStudyId, chapters, chapterIndex), detourLeaf.fen, detourLine[0].san, quality, spacedRepetitionIntensity)
           void persistReviewData()
         }
 
@@ -473,7 +481,7 @@ function App() {
       }, 700)
       return () => clearTimeout(timeout)
     }
-  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters, repeatFailedVariationsEnabled])
+  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity])
 
   useEffect(() => {
     if (!quizDone) return
@@ -519,38 +527,17 @@ function App() {
     event.target.value = ''
   }
 
-  function importSingleStudy(studyName: string, parsedChapters: Chapter[], playerColor: 'white' | 'black'): { stored: StoredStudy; notice: string } {
-    const existingStudy = loadStudies().find(study => study.name === studyName)
-    const previousSnapshot = existingStudy
-      ? JSON.stringify({ playerColor: existingStudy.playerColor, chapters: existingStudy.chapters })
-      : null
-
+  function importSingleStudy(studyName: string, parsedChapters: Chapter[], playerColor: 'white' | 'black'): { stored: StoredStudy } {
     const stored = saveStudy(studyName, playerColor, parsedChapters)
     migrateLegacyChapterIdsForStudies([stored])
 
-    const currentSnapshot = JSON.stringify({ playerColor: stored.playerColor, chapters: stored.chapters })
-    const structureChanged = previousSnapshot === null || previousSnapshot !== currentSnapshot
-
-    let totalReset = 0
-    totalReset += pruneStudyChapterIds(stored.id, new Set(buildChapterIds(stored.id, stored.chapters)))
+    pruneStudyChapterIds(stored.id, new Set(buildChapterIds(stored.id, stored.chapters)))
     stored.chapters.forEach((chapter, chapterIndex) => {
       const cid = chapterId(stored.id, stored.chapters, chapterIndex)
       const lines = extractLines(chapter, stored.playerColor)
-      totalReset += syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
+      syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
       updateForkMainlines(cid, extractForkMoves(chapter))
     })
-
-    let notice: string
-    if (!existingStudy) {
-      notice = `Uploaded "${studyName}" with ${stored.chapters.length} chapter${stored.chapters.length === 1 ? '' : 's'}.`
-    } else if (!structureChanged && totalReset === 0) {
-      notice = `Uploaded "${studyName}". No changes were detected.`
-    } else {
-      const resetSummary = totalReset > 0
-        ? `${totalReset} score record${totalReset === 1 ? '' : 's'} removed because lines or chapters no longer exist.`
-        : 'No score records needed cleanup.'
-      notice = `Updated "${studyName}". ${resetSummary}`
-    }
 
     const allStudies = loadStudies()
     const allChaptersMap = new Map<string, string>()
@@ -562,9 +549,8 @@ function App() {
 
     setConflictWarnings(findConflicts(allChaptersMap))
     setStoredStudies(allStudies)
-    setResetNotice(notice)
 
-    return { stored, notice }
+    return { stored }
   }
 
   async function runLichessSync(accessToken: string): Promise<void> {
@@ -580,12 +566,10 @@ function App() {
     const studiesToSync = parsedStudies.filter(study => !study.name.startsWith('/'))
 
     if (parsedStudies.length === 0) {
-      setResetNotice(`Connected as ${account.username}, but no studies were found to sync.`)
       return
     }
 
     if (studiesToSync.length === 0) {
-      setResetNotice(`Connected as ${account.username}, but all studies were ignored by your '/' prefix rule.`)
       return
     }
 
@@ -856,7 +840,6 @@ function App() {
 
   function handleRepertoireGoHome() {
     setError(null)
-    setResetNotice(null)
     setConflictWarnings([])
     setView('home')
   }
@@ -872,8 +855,8 @@ function App() {
           uploadColor={uploadColor}
           soundEnabled={soundEnabled}
           repeatFailedVariationsEnabled={repeatFailedVariationsEnabled}
+          spacedRepetitionIntensity={spacedRepetitionIntensity}
           error={error}
-          resetNotice={resetNotice}
           conflictWarnings={conflictWarnings}
           onGoHome={handleRepertoireGoHome}
           onTrainChapter={trainChapter}
@@ -896,6 +879,7 @@ function App() {
           onDismissConflicts={() => setConflictWarnings([])}
           onToggleSound={handleSoundToggle}
           onToggleRepeatFailedVariations={handleRepeatFailedVariationsToggle}
+          onSetSpacedRepetitionIntensity={handleSpacedRepetitionIntensityChange}
           fileInputRef={fileInputRef}
         />
       )}

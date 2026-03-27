@@ -12,8 +12,8 @@ interface RepertoireViewProps {
   uploadColor: 'white' | 'black'
   soundEnabled: boolean
   repeatFailedVariationsEnabled: boolean
+  spacedRepetitionIntensity: 1 | 2 | 3 | 4 | 5
   error: string | null
-  resetNotice: string | null
   conflictWarnings: ConflictInfo[]
   onGoHome: () => void
   onTrainChapter: (study: StoredStudy, chapterIndex: number) => void
@@ -33,6 +33,7 @@ interface RepertoireViewProps {
   onDismissConflicts: () => void
   onToggleSound: () => void
   onToggleRepeatFailedVariations: () => void
+  onSetSpacedRepetitionIntensity: (value: number) => void
   fileInputRef: React.RefObject<HTMLInputElement | null>
 }
 
@@ -44,8 +45,8 @@ export default function RepertoireView({
   uploadColor,
   soundEnabled,
   repeatFailedVariationsEnabled,
+  spacedRepetitionIntensity,
   error,
-  resetNotice,
   conflictWarnings,
   onGoHome,
   onTrainChapter,
@@ -65,6 +66,7 @@ export default function RepertoireView({
   onDismissConflicts,
   onToggleSound,
   onToggleRepeatFailedVariations,
+  onSetSpacedRepetitionIntensity,
   fileInputRef,
 }: RepertoireViewProps) {
   const [showStreakPanel, setShowStreakPanel] = useState(false)
@@ -170,6 +172,27 @@ export default function RepertoireView({
                       <span className="rv-sound-toggle-thumb" />
                     </button>
                   </label>
+                  <div className="rv-intensity-setting">
+                    <div className="rv-intensity-row">
+                      <span className="rv-setting-text">Spaced repetition intensity</span>
+                      <span className="rv-intensity-value">{spacedRepetitionIntensity}/5</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={spacedRepetitionIntensity}
+                      onChange={event => onSetSpacedRepetitionIntensity(Number(event.target.value))}
+                      className="rv-intensity-slider"
+                      aria-label="Spaced repetition intensity"
+                    />
+                    <div className="rv-intensity-scale">
+                      <span>Calm</span>
+                      <span>Balanced</span>
+                      <span>Intense</span>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -249,7 +272,6 @@ export default function RepertoireView({
           <input ref={fileInputRef} type="file" accept=".pgn" className="rv-hidden-input" onChange={onFileChange} />
 
           {error && <div className="rv-error">{error}</div>}
-          {resetNotice && <div className="rv-reset-note">↺ {resetNotice}</div>}
 
           {conflictWarnings.length > 0 && (
             <div className="rv-conflicts">

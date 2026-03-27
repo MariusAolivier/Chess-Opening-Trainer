@@ -117,7 +117,8 @@ export function recordReview(
   chapterId: string,
   lineId: string,
   displaySan: string,
-  quality: 0 | 1 | 2 | 3 | 4 | 5
+  quality: 0 | 1 | 2 | 3 | 4 | 5,
+  intensity: 1 | 2 | 3 | 4 | 5 = 3
 ): ScoreRecord {
   const reviewedAt = new Date().toISOString()
   const records = load()
@@ -138,7 +139,8 @@ export function recordReview(
   } else if (existing.interval === 1) {
     interval = 6
   } else {
-    interval = Math.round(existing.interval * ease)
+    const baseInterval = Math.round(existing.interval * ease)
+    interval = Math.max(1, Math.round(baseInterval * intensityIntervalScale(intensity)))
   }
 
   const dueDate = new Date(Date.now() + interval * 86_400_000).toISOString()
@@ -160,6 +162,22 @@ export function recordReview(
   save(records)
   recordReviewActivity()
   return record
+}
+
+function intensityIntervalScale(intensity: 1 | 2 | 3 | 4 | 5): number {
+  // Higher intensity means the same lines come back sooner.
+  switch (intensity) {
+    case 1:
+      return 1.35
+    case 2:
+      return 1.15
+    case 3:
+      return 1
+    case 4:
+      return 0.85
+    case 5:
+      return 0.7
+  }
 }
 
 export function loadReviewActivity(): ReviewActivityRecord[] {

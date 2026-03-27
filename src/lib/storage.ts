@@ -11,6 +11,13 @@ export interface StoredStudy {
 const KEY = 'chess-opening-trainer:studies'
 const SOUND_ENABLED_KEY = 'chess-opening-trainer:sound-enabled'
 const REPEAT_FAILED_VARIATIONS_KEY = 'chess-opening-trainer:repeat-failed-variations'
+const SPACED_REPETITION_INTENSITY_KEY = 'chess-opening-trainer:spaced-repetition-intensity'
+
+function clampIntensity(value: number): 1 | 2 | 3 | 4 | 5 {
+  if (value <= 1) return 1
+  if (value >= 5) return 5
+  return Math.round(value) as 1 | 2 | 3 | 4 | 5
+}
 
 function normalizeStudyName(name: string): string {
   return name.trim().toLocaleLowerCase()
@@ -42,6 +49,21 @@ export function loadRepeatFailedVariationsEnabled(): boolean {
 
 export function saveRepeatFailedVariationsEnabled(enabled: boolean): void {
   localStorage.setItem(REPEAT_FAILED_VARIATIONS_KEY, String(enabled))
+}
+
+export function loadSpacedRepetitionIntensity(): 1 | 2 | 3 | 4 | 5 {
+  try {
+    const raw = localStorage.getItem(SPACED_REPETITION_INTENSITY_KEY)
+    if (raw === null) return 3
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? clampIntensity(parsed) : 3
+  } catch {
+    return 3
+  }
+}
+
+export function saveSpacedRepetitionIntensity(value: number): void {
+  localStorage.setItem(SPACED_REPETITION_INTENSITY_KEY, String(clampIntensity(value)))
 }
 
 export function loadStudies(): StoredStudy[] {
