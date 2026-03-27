@@ -220,7 +220,13 @@ export default function RepertoireView({
             disabled={lichessSyncing}
             className={`rv-lichess-sync-btn ${lichessSyncing ? 'rv-lichess-sync-btn-disabled' : ''}`}
           >
-            {lichessSyncing ? 'Syncing Lichess...' : '↻ Sync with Lichess'}
+            <img
+              src={import.meta.env.BASE_URL + 'lichess.png'}
+              alt=""
+              aria-hidden="true"
+              className="rv-lichess-icon"
+            />
+            <span>{lichessSyncing ? 'Syncing Lichess...' : 'Sync with Lichess'}</span>
           </button>
           {lichessUsername && (
             <div className="rv-lichess-user">Connected: {lichessUsername}</div>
