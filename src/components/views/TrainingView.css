@@ -42,6 +42,36 @@
   max-width: 340px;
 }
 
+.tv-replay-banner {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid #5f693a;
+  background: #2c3420;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.tv-replay-label {
+  color: #d8f0a4;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.tv-replay-skip-btn {
+  padding: 3px 10px;
+  border: 1px solid #7e8d4e;
+  border-radius: 999px;
+  background: #3a4628;
+  color: #ebf8ca;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
 .tv-move-info {
   font-size: 0.9rem;
   color: #555;

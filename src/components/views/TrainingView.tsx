@@ -22,6 +22,7 @@ interface TrainingViewProps {
   wrongGuessTick: number
   revealedAnswer: boolean
   inlineDetour: InlineDetour | null
+  isReplayingVariation: boolean
   moveIndex: number
   mainline: MainlineMove[]
   currentFen?: string
@@ -35,6 +36,7 @@ interface TrainingViewProps {
   onMove: (from: string, to: string) => boolean
   onToggleBranches: () => void
   onRevealAnswer: () => void
+  onSkipReplayVariation: () => void
 }
 
 export default function TrainingView({
@@ -47,6 +49,7 @@ export default function TrainingView({
   wrongGuessTick,
   revealedAnswer,
   inlineDetour,
+  isReplayingVariation,
   moveIndex,
   mainline,
   currentFen,
@@ -60,6 +63,7 @@ export default function TrainingView({
   onMove,
   onToggleBranches,
   onRevealAnswer,
+  onSkipReplayVariation,
 }: TrainingViewProps) {
   const [isBoardShaking, setIsBoardShaking] = useState(false)
   const study = storedStudies.find(item => item.id === selectedStudyId)
@@ -200,6 +204,15 @@ export default function TrainingView({
         annotation={activeAnnotation}
         className={isBoardShaking ? 'tv-board-shake' : undefined}
       />
+
+      {isReplayingVariation && (
+        <div className="tv-replay-banner">
+          <span className="tv-replay-label">↻ Replaying variation</span>
+          <button type="button" onClick={onSkipReplayVariation} className="tv-replay-skip-btn">
+            Skip
+          </button>
+        </div>
+      )}
 
       <div className="tv-feedback">
         {quizMode && quizDone && <span className="tv-line-complete">✓ Line complete!</span>}
