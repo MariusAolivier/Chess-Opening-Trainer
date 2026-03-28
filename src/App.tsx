@@ -70,6 +70,7 @@ import {
 } from './lib/lichess'
 
 const STREAK_SHOWN_KEY = 'chess-opening-trainer:streak-shown-day'
+const VARIATION_COMPLETE_DELAY_MS = 1000
 
 function todayDayKey(): string {
   const d = new Date()
@@ -109,6 +110,7 @@ function App() {
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
 
   const [statsKey, setStatsKey] = useState(0)
+  const [selectedRunPriority, setSelectedRunPriority] = useState<0 | 1 | 2 | null>(null)
   const [uploadColor, setUploadColor] = useState<'white' | 'black'>('white')
   const [activePlayerColor, setActivePlayerColor] = useState<'white' | 'black'>('white')
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'ok' | 'error'>('idle')
@@ -493,7 +495,7 @@ function App() {
             }
             setInlineDetour(null)
           }
-        }, 700)
+        }, VARIATION_COMPLETE_DELAY_MS)
 
         return () => clearTimeout(timeout)
       }
@@ -526,38 +528,42 @@ function App() {
       failedDetoursForRunRef.current = []
 
       if (repeatFailedVariationsEnabled && (hasMainlineFailure || detoursToRetry.length > 0)) {
-        mainlineFailedThisRunRef.current = false
-        mainlineWrongCountRef.current = new Map()
-        setQuizWrong(null)
-        setRevealedAnswer(false)
+        const timeout = setTimeout(() => {
+          mainlineFailedThisRunRef.current = false
+          mainlineWrongCountRef.current = new Map()
+          setQuizWrong(null)
+          setRevealedAnswer(false)
 
-        if (hasMainlineFailure) {
-          queuedRetryDetoursRef.current = detoursToRetry
-          immediateDetourReplayRef.current = false
-          setIsReplayingVariation(true)
-          setInlineDetour(null)
-          setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
-          setBoardResetKey(key => key + 1)
-          return
-        }
+          if (hasMainlineFailure) {
+            queuedRetryDetoursRef.current = detoursToRetry
+            immediateDetourReplayRef.current = false
+            setIsReplayingVariation(true)
+            setInlineDetour(null)
+            setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
+            setBoardResetKey(key => key + 1)
+            return
+          }
 
-        const [firstRetry, ...restRetries] = detoursToRetry
-        if (firstRetry) {
-          queuedRetryDetoursRef.current = restRetries
-          detourWrongCountRef.current = 0
-          immediateDetourReplayRef.current = false
-          setIsReplayingVariation(true)
-          setInlineDetour({
-            forkFen: firstRetry.forkFen,
-            forkMainlineIndex: firstRetry.forkMainlineIndex,
-            pendingInlines: [],
-            detourLine: firstRetry.detourLine,
-            detourIndex: -1,
-            isIndependent: firstRetry.isIndependent,
-          })
-          setBoardResetKey(key => key + 1)
-          return
-        }
+          const [firstRetry, ...restRetries] = detoursToRetry
+          if (firstRetry) {
+            queuedRetryDetoursRef.current = restRetries
+            detourWrongCountRef.current = 0
+            immediateDetourReplayRef.current = false
+            setIsReplayingVariation(true)
+            setInlineDetour({
+              forkFen: firstRetry.forkFen,
+              forkMainlineIndex: firstRetry.forkMainlineIndex,
+              pendingInlines: [],
+              detourLine: firstRetry.detourLine,
+              detourIndex: -1,
+              isIndependent: firstRetry.isIndependent,
+            })
+            setBoardResetKey(key => key + 1)
+            return
+          }
+        }, VARIATION_COMPLETE_DELAY_MS)
+
+        return () => clearTimeout(timeout)
       }
 
       immediateDetourReplayRef.current = false
@@ -587,13 +593,18 @@ function App() {
 
     if (!visitedDetourForksRef.current.has(nextIndex)) {
       const queuedAlternatives = selectedStudyId
-        ? [...mainline[nextIndex].alternatives].sort((left, right) => {
-          const leftKey = alternativeSortKey(selectedStudyId, selectedChapter, fen, left)
-          const rightKey = alternativeSortKey(selectedStudyId, selectedChapter, fen, right)
-          if (leftKey.priority !== rightKey.priority) return leftKey.priority - rightKey.priority
-          if (leftKey.dueAt !== rightKey.dueAt) return leftKey.dueAt - rightKey.dueAt
-          return left.san.localeCompare(right.san)
-        })
+        ? [...mainline[nextIndex].alternatives]
+          .map(alternative => ({
+            alternative,
+            sortKey: alternativeSortKey(selectedStudyId, selectedChapter, fen, alternative),
+          }))
+          .filter(item => selectedRunPriority === null || item.sortKey.priority === selectedRunPriority)
+          .sort((left, right) => {
+            if (left.sortKey.priority !== right.sortKey.priority) return left.sortKey.priority - right.sortKey.priority
+            if (left.sortKey.dueAt !== right.sortKey.dueAt) return left.sortKey.dueAt - right.sortKey.dueAt
+            return left.alternative.san.localeCompare(right.alternative.san)
+          })
+          .map(item => item.alternative)
         : mainline[nextIndex].alternatives
       if (queuedAlternatives.length > 0) {
         setInlineDetour({
@@ -617,7 +628,7 @@ function App() {
       }, 700)
       return () => clearTimeout(timeout)
     }
-  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity, isReplayingVariation])
+  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity, isReplayingVariation, selectedRunPriority])
 
   useEffect(() => {
     if (!quizDone) return
@@ -846,7 +857,7 @@ function App() {
     })
   }
 
-  function trainChapter(study: StoredStudy, chapterIndex: number) {
+  function trainChapter(study: StoredStudy, chapterIndex: number, runPriority: 0 | 1 | 2 | null = null) {
     const chapter = study.chapters[chapterIndex]
     const cid = chapterId(study.id, study.chapters, chapterIndex)
 
@@ -856,6 +867,7 @@ function App() {
 
     loadChapters(study.chapters, study.playerColor, study.id)
     setSelectedChapter(chapter)
+    setSelectedRunPriority(runPriority)
     setQuizMode(true)
     resetTrainingProgress()
     setStatsKey(key => key + 1)
@@ -925,9 +937,9 @@ function App() {
           return left.entry.cid.localeCompare(right.entry.cid)
         })
 
-      const picked = pickOrder[0]?.entry
+      const picked = pickOrder[0]
       if (!picked) return
-      trainChapter(picked.study, picked.chapterIndex)
+      trainChapter(picked.entry.study, picked.entry.chapterIndex, picked.priority as 0 | 1 | 2)
       return
     }
 
@@ -938,7 +950,7 @@ function App() {
 
     const pool = dueEntries.length > 0 ? dueEntries : allEntries
     const picked = pool[Math.floor(Math.random() * pool.length)]
-    trainChapter(picked.study, picked.chapterIndex)
+    trainChapter(picked.study, picked.chapterIndex, null)
   }
 
   function trainFromSelection() {
