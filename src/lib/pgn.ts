@@ -153,6 +153,14 @@ export interface TrainableLine {
   plyCount: number
 }
 
+export function mainlineLineId(leafFen: string): string {
+  return `main::${leafFen}`
+}
+
+export function variationLineId(forkFen: string, firstSan: string, leafFen: string): string {
+  return `var::${forkFen}::${firstSan}::${leafFen}`
+}
+
 export function extractTrainableLines(chapter: Chapter, playerColor?: 'white' | 'black'): TrainableLine[] {
   const lines: TrainableLine[] = []
   const seen = new Set<string>()
@@ -180,10 +188,9 @@ export function extractTrainableLines(chapter: Chapter, playerColor?: 'white' | 
     const sideToMove = currentFen.split(' ')[1] as 'w' | 'b'
     for (let index = 1; index < nodes.length; index += 1) {
       const alternative = nodes[index]
-      if (alternative.independent) continue
       if (userColor !== null && sideToMove === userColor) continue
       const leaf = leafOnPrimaryPath(alternative)
-      addLine(leaf.fen, alternative.san, 1 + lineDepth(alternative.children))
+      addLine(variationLineId(currentFen, alternative.san, leaf.fen), alternative.san, 1 + lineDepth(alternative.children))
     }
 
     const main = nodes[0]
@@ -193,7 +200,7 @@ export function extractTrainableLines(chapter: Chapter, playerColor?: 'white' | 
   }
 
   if (mainlineLeaf) {
-    addLine(mainlineLeaf.fen, 'Main line', lineDepth(chapter.moves))
+    addLine(mainlineLineId(mainlineLeaf.fen), 'Main line', lineDepth(chapter.moves))
   }
 
   return lines

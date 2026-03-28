@@ -21,6 +21,7 @@ export type InlineDetour = {
   pendingInlines: MoveNode[]
   detourLine: FlatMove[]
   detourIndex: number
+  isIndependent: boolean
 }
 
 export const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'

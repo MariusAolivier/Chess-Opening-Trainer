@@ -6,7 +6,7 @@ import StreakAnimation from './components/StreakAnimation'
 import HomeView from './components/views/HomeView'
 import RepertoireView from './components/views/RepertoireView'
 import TrainingView from './components/views/TrainingView'
-import { parseStudy, parseStudies, type Chapter, type MoveNode, extractForkMoves, extractLines } from './lib/pgn'
+import { parseStudy, parseStudies, type Chapter, type MoveNode, extractForkMoves, extractLines, mainlineLineId, variationLineId } from './lib/pgn'
 import {
   loadStudies,
   saveStudy,
@@ -79,11 +79,12 @@ function todayDayKey(): string {
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const visitedDetourForksRef = useRef<Set<number>>(new Set())
-  const queuedRetryDetoursRef = useRef<Array<{ forkFen: string; detourLine: FlatMove[]; forkMainlineIndex: number }>>([])
-  const failedDetoursForRunRef = useRef<Array<{ forkFen: string; detourLine: FlatMove[]; forkMainlineIndex: number }>>([])
+  const queuedRetryDetoursRef = useRef<Array<{ forkFen: string; detourLine: FlatMove[]; forkMainlineIndex: number; isIndependent: boolean; retryId: string }>>([])
+  const failedDetoursForRunRef = useRef<Array<{ forkFen: string; detourLine: FlatMove[]; forkMainlineIndex: number; isIndependent: boolean; retryId: string }>>([])
   const mainlineFailedThisRunRef = useRef(false)
   const detourWrongCountRef = useRef(0)
   const mainlineWrongCountRef = useRef<Map<number, number>>(new Map())
+  const immediateDetourReplayRef = useRef(false)
 
   const [view, setView] = useState<'home' | 'repertoire' | 'training'>('home')
   const [storedStudies, setStoredStudies] = useState<StoredStudy[]>(() => loadStudies())
@@ -122,6 +123,30 @@ function App() {
   const [lichessSyncing, setLichessSyncing] = useState(false)
   const [lichessUsername, setLichessUsername] = useState<string | null>(null)
 
+  function buildDetourRetryId(forkMainlineIndex: number, detourLine: FlatMove[]): string {
+    const firstSan = detourLine[0]?.san ?? ''
+    const leafFen = detourLine[detourLine.length - 1]?.fen ?? ''
+    return `${forkMainlineIndex}::${variationLineId('', firstSan, leafFen)}`
+  }
+
+  function findScoreForLine(chapterScores: ReturnType<typeof loadScores>, chapterScoreId: string, lineId: string) {
+    const exact = chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === lineId)
+    if (exact) return exact
+
+    if (lineId.startsWith('main::')) {
+      const legacy = lineId.slice('main::'.length)
+      return chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === legacy)
+    }
+
+    if (lineId.startsWith('var::')) {
+      const lastSep = lineId.lastIndexOf('::')
+      const legacy = lastSep > 0 ? lineId.slice(lastSep + 2) : lineId
+      return chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === legacy)
+    }
+
+    return undefined
+  }
+
   function resetTrainingProgress() {
     setMoveIndex(-1)
     setQuizDone(false)
@@ -135,6 +160,7 @@ function App() {
     queuedRetryDetoursRef.current = []
     failedDetoursForRunRef.current = []
     mainlineFailedThisRunRef.current = false
+    immediateDetourReplayRef.current = false
     detourWrongCountRef.current = 0
     mainlineWrongCountRef.current = new Map()
   }
@@ -176,8 +202,30 @@ function App() {
 
     const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((acc, value) => acc + value, 0)
     const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
-    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), leaf.fen, 'Main line', quality, spacedRepetitionIntensity)
+    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), mainlineLineId(leaf.fen), 'Main line', quality, spacedRepetitionIntensity)
     void persistReviewData()
+  }
+
+  function alternativeSortKey(studyId: string, chapter: Chapter, forkFen: string, alternative: MoveNode): { priority: number; dueAt: number } {
+    const chapterIndex = chapters.indexOf(chapter)
+    if (chapterIndex < 0) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+
+    const cid = chapterId(studyId, chapters, chapterIndex)
+    const detourLine = flattenDetour(alternative)
+    const lineLeafFen = detourLine.at(-1)?.fen
+    if (!lineLeafFen) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+
+    const lineId = variationLineId(forkFen, alternative.san, lineLeafFen)
+    const score = findScoreForLine(loadScores(), cid, lineId)
+    if (!score || !score.lastReviewedAt || score.interval <= 0) {
+      return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+    }
+
+    const dueAt = Date.parse(score.dueDate)
+    if (Number.isNaN(dueAt)) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+    if (dueAt <= Date.now()) return { priority: 1, dueAt }
+
+    return { priority: 2, dueAt }
   }
 
   function maybeFireDailyChapterStreakAnimation() {
@@ -348,7 +396,7 @@ function App() {
     if (!quizMode || !selectedChapter || quizDone) return
 
     if (inlineDetour) {
-      const { detourLine, detourIndex, forkFen, pendingInlines, forkMainlineIndex } = inlineDetour
+      const { detourLine, detourIndex, forkFen, pendingInlines, forkMainlineIndex, isIndependent } = inlineDetour
       const detourFen = detourIndex === -1 ? forkFen : detourLine[detourIndex]?.fen
       if (!detourFen) return
 
@@ -357,17 +405,16 @@ function App() {
         const wrongs = detourWrongCountRef.current
         const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 3 : 1
 
-        if (!isReplayingVariation && repeatFailedVariationsEnabled && wrongs > 0) {
-          const retryKey = detourLine[detourLine.length - 1]?.fen ?? detourLine[0]?.fen
-          const alreadyQueued = failedDetoursForRunRef.current.some(retry => {
-            const existingKey = retry.detourLine[retry.detourLine.length - 1]?.fen ?? retry.detourLine[0]?.fen
-            return existingKey === retryKey
-          })
+        if (!isReplayingVariation && repeatFailedVariationsEnabled && wrongs > 0 && !isIndependent) {
+          const retryId = buildDetourRetryId(forkMainlineIndex, detourLine)
+          const alreadyQueued = failedDetoursForRunRef.current.some(retry => retry.retryId === retryId)
           if (!alreadyQueued) {
             failedDetoursForRunRef.current.push({
               forkFen,
               forkMainlineIndex,
               detourLine: [...detourLine],
+              isIndependent: inlineDetour.isIndependent,
+              retryId,
             })
           }
         }
@@ -375,23 +422,50 @@ function App() {
         if (!isReplayingVariation && selectedStudyId && selectedChapter) {
           const chapterIndex = chapters.indexOf(selectedChapter)
           const detourLeaf = detourLine[detourLine.length - 1]
-          recordReview(chapterId(selectedStudyId, chapters, chapterIndex), detourLeaf.fen, detourLine[0].san, quality, spacedRepetitionIntensity)
+          recordReview(
+            chapterId(selectedStudyId, chapters, chapterIndex),
+            variationLineId(forkFen, detourLine[0].san, detourLeaf.fen),
+            detourLine[0].san,
+            quality,
+            spacedRepetitionIntensity
+          )
           void persistReviewData()
         }
 
         const timeout = setTimeout(() => {
           setQuizWrong(null)
           setBoardResetKey(key => key + 1)
+          const replayingMainline = isReplayingVariation && !immediateDetourReplayRef.current && moveIndex < mainline.length - 1
+
+          // Failed independent variations should redo immediately before moving on.
+          if (!isReplayingVariation && repeatFailedVariationsEnabled && wrongs > 0 && isIndependent) {
+            detourWrongCountRef.current = 0
+            immediateDetourReplayRef.current = true
+            setIsReplayingVariation(true)
+            setInlineDetour({
+              forkFen,
+              forkMainlineIndex,
+              pendingInlines,
+              detourLine,
+              detourIndex: -1,
+              isIndependent,
+            })
+            return
+          }
 
           if (pendingInlines.length > 0) {
             detourWrongCountRef.current = 0
-            setIsReplayingVariation(false)
+            immediateDetourReplayRef.current = false
+            if (!replayingMainline) {
+              setIsReplayingVariation(false)
+            }
             setInlineDetour({
               forkFen,
               forkMainlineIndex,
               pendingInlines: pendingInlines.slice(1),
               detourLine: flattenDetour(pendingInlines[0]),
               detourIndex: -1,
+              isIndependent: Boolean(pendingInlines[0]?.independent),
             })
           } else {
             const replayingMainline = isReplayingVariation && moveIndex < mainline.length - 1
@@ -399,6 +473,7 @@ function App() {
               const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
               if (nextQueuedRetry) {
                 detourWrongCountRef.current = 0
+                immediateDetourReplayRef.current = false
                 setIsReplayingVariation(true)
                 setInlineDetour({
                   forkFen: nextQueuedRetry.forkFen,
@@ -406,12 +481,14 @@ function App() {
                   pendingInlines: [],
                   detourLine: nextQueuedRetry.detourLine,
                   detourIndex: -1,
+                  isIndependent: nextQueuedRetry.isIndependent,
                 })
                 return
               }
             }
             visitedDetourForksRef.current.add(forkMainlineIndex)
             if (!replayingMainline) {
+              immediateDetourReplayRef.current = false
               setIsReplayingVariation(false)
             }
             setInlineDetour(null)
@@ -456,6 +533,7 @@ function App() {
 
         if (hasMainlineFailure) {
           queuedRetryDetoursRef.current = detoursToRetry
+          immediateDetourReplayRef.current = false
           setIsReplayingVariation(true)
           setInlineDetour(null)
           setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
@@ -467,6 +545,7 @@ function App() {
         if (firstRetry) {
           queuedRetryDetoursRef.current = restRetries
           detourWrongCountRef.current = 0
+          immediateDetourReplayRef.current = false
           setIsReplayingVariation(true)
           setInlineDetour({
             forkFen: firstRetry.forkFen,
@@ -474,12 +553,14 @@ function App() {
             pendingInlines: [],
             detourLine: firstRetry.detourLine,
             detourIndex: -1,
+            isIndependent: firstRetry.isIndependent,
           })
           setBoardResetKey(key => key + 1)
           return
         }
       }
 
+      immediateDetourReplayRef.current = false
       setIsReplayingVariation(false)
       setQuizDone(true)
       return
@@ -496,6 +577,7 @@ function App() {
             pendingInlines: [],
             detourLine: queuedRetry.detourLine,
             detourIndex: -1,
+            isIndependent: queuedRetry.isIndependent,
           })
           detourWrongCountRef.current = 0
           return
@@ -504,7 +586,15 @@ function App() {
     }
 
     if (!visitedDetourForksRef.current.has(nextIndex)) {
-      const queuedAlternatives = mainline[nextIndex].alternatives.filter(node => !node.independent)
+      const queuedAlternatives = selectedStudyId
+        ? [...mainline[nextIndex].alternatives].sort((left, right) => {
+          const leftKey = alternativeSortKey(selectedStudyId, selectedChapter, fen, left)
+          const rightKey = alternativeSortKey(selectedStudyId, selectedChapter, fen, right)
+          if (leftKey.priority !== rightKey.priority) return leftKey.priority - rightKey.priority
+          if (leftKey.dueAt !== rightKey.dueAt) return leftKey.dueAt - rightKey.dueAt
+          return left.san.localeCompare(right.san)
+        })
+        : mainline[nextIndex].alternatives
       if (queuedAlternatives.length > 0) {
         setInlineDetour({
           forkFen: fen,
@@ -512,6 +602,7 @@ function App() {
           pendingInlines: queuedAlternatives.slice(1),
           detourLine: flattenDetour(queuedAlternatives[0]),
           detourIndex: -1,
+          isIndependent: Boolean(queuedAlternatives[0]?.independent),
         })
         detourWrongCountRef.current = 0
         return
@@ -789,21 +880,34 @@ function App() {
     if (allEntries.length === 0) return
 
     if (selectedChapterIds.size > 0) {
+      const allScores = loadScores()
       const pickOrder = allEntries
         .map(entry => {
-          const chapterScores = scores.filter(score => score.chapterId === entry.cid)
-          const hasReviewed = chapterScores.some(score => Boolean(score.lastReviewedAt))
-          const nextDueAt = chapterScores.reduce((earliest, score) => {
-            const dueAt = Date.parse(score.dueDate)
+          const chapter = entry.study.chapters[entry.chapterIndex]
+          const chapterLines = chapter ? extractLines(chapter, entry.study.playerColor) : []
+          const chapterScores = allScores.filter(score => score.chapterId === entry.cid)
+
+          const hasNotReviewed = chapterLines.some(line => {
+            const lineScore = findScoreForLine(chapterScores, entry.cid, line.lineId)
+            return !lineScore || !lineScore.lastReviewedAt || lineScore.interval <= 0
+          })
+
+          const hasDue = chapterLines.some(line => {
+            const lineScore = findScoreForLine(chapterScores, entry.cid, line.lineId)
+            if (!lineScore || !lineScore.lastReviewedAt || lineScore.interval <= 0) return false
+            const dueAt = Date.parse(lineScore.dueDate)
+            return !Number.isNaN(dueAt) && dueAt <= now
+          })
+
+          const nextDueAt = chapterLines.reduce((earliest, line) => {
+            const lineScore = findScoreForLine(chapterScores, entry.cid, line.lineId)
+            if (!lineScore || !lineScore.lastReviewedAt || lineScore.interval <= 0) return earliest
+            const dueAt = Date.parse(lineScore.dueDate)
             if (Number.isNaN(dueAt)) return earliest
             return Math.min(earliest, dueAt)
           }, Number.POSITIVE_INFINITY)
 
-          const priority = !hasReviewed
-            ? 0
-            : nextDueAt <= now
-              ? 1
-              : 2
+          const priority = hasNotReviewed ? 0 : hasDue ? 1 : 2
 
           return {
             entry,
@@ -941,7 +1045,13 @@ function App() {
       const detourLeaf = inlineDetour.detourLine[inlineDetour.detourLine.length - 1]
       if (!detourLeaf) return
 
-      recordReview(chapterId(selectedStudyId, chapters, chapterIndex), detourLeaf.fen, inlineDetour.detourLine[0].san, 5, spacedRepetitionIntensity)
+      recordReview(
+        chapterId(selectedStudyId, chapters, chapterIndex),
+        variationLineId(inlineDetour.forkFen, inlineDetour.detourLine[0].san, detourLeaf.fen),
+        inlineDetour.detourLine[0].san,
+        5,
+        spacedRepetitionIntensity
+      )
       void persistReviewData()
       visitedDetourForksRef.current.add(inlineDetour.forkMainlineIndex)
     } else {
@@ -953,6 +1063,7 @@ function App() {
     const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
     if (nextQueuedRetry) {
       detourWrongCountRef.current = 0
+      immediateDetourReplayRef.current = false
       setIsReplayingVariation(true)
       setInlineDetour({
         forkFen: nextQueuedRetry.forkFen,
@@ -960,11 +1071,13 @@ function App() {
         pendingInlines: [],
         detourLine: nextQueuedRetry.detourLine,
         detourIndex: -1,
+        isIndependent: nextQueuedRetry.isIndependent,
       })
       setBoardResetKey(key => key + 1)
       return
     }
 
+    immediateDetourReplayRef.current = false
     setIsReplayingVariation(false)
     setInlineDetour(null)
     setQuizDone(true)

@@ -148,7 +148,7 @@ export default function TrainingView({
         <div className="tv-move-info">
           {inlineDetour ? (
             <>
-              <span className="tv-inline-label">↪ Sideline</span>
+              {!inlineDetour.isIndependent && <span className="tv-inline-label">↪ Sideline</span>}
               {inlineDetour.detourIndex >= 0 && (
                 <span className="tv-inline-san">
                   {inlineDetour.detourLine[inlineDetour.detourIndex]?.san}
