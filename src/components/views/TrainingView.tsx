@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react'
 import Chessboard from '../Chessboard'
-import type { Chapter, MoveNode } from '../../lib/pgn'
+import type { Chapter } from '../../lib/pgn'
 import type { StoredStudy } from '../../lib/storage'
 import type { InlineDetour, MainlineMove } from '../../lib/training'
 import './TrainingView.css'
 
-interface BranchFork {
-  moveNumber: number
-  side: 'w' | 'b'
-  mainSan: string
-  alts: MoveNode[]
+interface QueuePreviewItem {
+  label: string
+  forkMainlineIndex: number
 }
 
 interface TrainingViewProps {
@@ -22,7 +20,7 @@ interface TrainingViewProps {
   wrongGuessTick: number
   revealedAnswer: boolean
   inlineDetour: InlineDetour | null
-  isReplayingVariation: boolean
+  isRetryingVariation: boolean
   moveIndex: number
   mainline: MainlineMove[]
   currentFen?: string
@@ -30,13 +28,11 @@ interface TrainingViewProps {
   commentsVisible: boolean
   activePlayerColor: 'white' | 'black'
   boardResetKey: number
-  branchForks: BranchFork[]
-  showBranches: boolean
+  queuePreview: QueuePreviewItem[]
   onBackHome: () => void
   onMove: (from: string, to: string) => boolean
-  onToggleBranches: () => void
   onRevealAnswer: () => void
-  onSkipReplayVariation: () => void
+  onSkipCurrentVariation: () => void
 }
 
 export default function TrainingView({
@@ -49,7 +45,7 @@ export default function TrainingView({
   wrongGuessTick,
   revealedAnswer,
   inlineDetour,
-  isReplayingVariation,
+  isRetryingVariation,
   moveIndex,
   mainline,
   currentFen,
@@ -57,13 +53,11 @@ export default function TrainingView({
   commentsVisible,
   activePlayerColor,
   boardResetKey,
-  branchForks,
-  showBranches,
+  queuePreview,
   onBackHome,
   onMove,
-  onToggleBranches,
   onRevealAnswer,
-  onSkipReplayVariation,
+  onSkipCurrentVariation,
 }: TrainingViewProps) {
   const [isBoardShaking, setIsBoardShaking] = useState(false)
   const study = storedStudies.find(item => item.id === selectedStudyId)
@@ -220,10 +214,10 @@ export default function TrainingView({
         className={isBoardShaking ? 'tv-board-shake' : undefined}
       />
 
-      {isReplayingVariation && (
-        <div className="tv-replay-banner">
-          <span className="tv-replay-label">↻ Replaying variation</span>
-          <button type="button" onClick={onSkipReplayVariation} className="tv-replay-skip-btn">
+      {isRetryingVariation && (
+        <div className="tv-retry-banner">
+          <span className="tv-retry-label">↻ Retrying variation</span>
+          <button type="button" onClick={onSkipCurrentVariation} className="tv-retry-skip-btn">
             Skip
           </button>
         </div>
@@ -266,30 +260,21 @@ export default function TrainingView({
         )
       })()}
 
-      {selectedChapter && branchForks.length > 0 && (
-        <div className="tv-variations-root">
-          <button onClick={onToggleBranches} className="tv-variations-toggle">
-            {showBranches ? '▲' : '▼'} See all variations in chapter
-          </button>
-          {showBranches && (
-            <div className="tv-variations-list">
-              {branchForks.map((fork, index) => (
-                <div key={index} className={`tv-variation-item ${index < branchForks.length - 1 ? 'tv-variation-item-divider' : ''}`}>
-                  <span className="tv-move-prefix">
-                    {fork.moveNumber}{fork.side === 'w' ? '.' : '...'}
-                  </span>{' '}
-                  <strong className="tv-main-san">{fork.mainSan}</strong>
-                  <span className="tv-mainline-label"> (mainline)</span>
-                  {fork.alts.map((alt, altIndex) => (
-                    <div key={altIndex} className="tv-alt-line">
-                      <span className={alt.independent ? 'tv-alt-dot-independent' : 'tv-alt-dot-inline'}>●</span>{' '}
-                      <strong>{alt.san}</strong>{' '}
-                      <span className="tv-alt-type">({alt.independent ? 'independent' : 'inline'})</span>
-                    </div>
-                  ))}
-                </div>
+      {selectedChapter && (
+        <div className="tv-queue-root">
+          <div className="tv-queue-title">Next in queue</div>
+          {queuePreview.length === 0 ? (
+            <div className="tv-queue-empty">No queued variations</div>
+          ) : (
+            <ol className="tv-queue-list">
+              {queuePreview.map((item, index) => (
+                <li key={`${item.forkMainlineIndex}-${item.label}-${index}`} className="tv-queue-item">
+                  <span className="tv-queue-rank">{index + 1}.</span>
+                  <span className="tv-queue-label">{item.label}</span>
+                  <span className="tv-queue-meta">@ ply {item.forkMainlineIndex + 1}</span>
+                </li>
               ))}
-            </div>
+            </ol>
           )}
         </div>
       )}

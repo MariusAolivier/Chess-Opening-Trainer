@@ -64,7 +64,6 @@ import {
 import {
   STREAK_SHOWN_KEY,
   VARIATION_COMPLETE_DELAY_MS,
-  buildDetourRetryId,
   buildParseWarningMessage,
   buildVariationSessionSequence,
   chapterConflictMap,
@@ -78,14 +77,23 @@ import { useKeyboardNavigation } from './hooks/useKeyboardNavigation'
 import { useLichessSync } from './hooks/useLichessSync'
 
 function App() {
+  type SessionVariationQueueItem = {
+    forkMainlineIndex: number
+    startFen: string
+    forkFen: string
+    scoreFirstSan: string
+    leadInLine: FlatMove[]
+    pendingInlines: MoveNode[]
+    detourLine: FlatMove[]
+    isIndependent: boolean
+    label: string
+  }
+
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const visitedDetourForksRef = useRef<Set<number>>(new Set())
-  const queuedRetryDetoursRef = useRef<Array<{ forkFen: string; detourLine: FlatMove[]; forkMainlineIndex: number; isIndependent: boolean; retryId: string }>>([])
-  const failedDetoursForRunRef = useRef<Array<{ forkFen: string; detourLine: FlatMove[]; forkMainlineIndex: number; isIndependent: boolean; retryId: string }>>([])
-  const mainlineFailedThisRunRef = useRef(false)
   const detourWrongCountRef = useRef(0)
   const mainlineWrongCountRef = useRef<Map<number, number>>(new Map())
-  const immediateDetourReplayRef = useRef(false)
+  const activeVariationScoreRef = useRef<{ forkFen: string; firstSan: string } | null>(null)
+  const activeVariationLeadInRef = useRef<FlatMove[]>([])
 
   const [view, setView] = useState<'home' | 'repertoire' | 'training'>('home')
   const [storedStudies, setStoredStudies] = useState<StoredStudy[]>(() => loadStudies())
@@ -101,14 +109,14 @@ function App() {
   const [revealedAnswer, setRevealedAnswer] = useState(false)
   const [trainingSessionKey, setTrainingSessionKey] = useState(0)
   const [inlineDetour, setInlineDetour] = useState<InlineDetour | null>(null)
-  const [isReplayingVariation, setIsReplayingVariation] = useState(false)
+  const [isRetryingVariation, setIsRetryingVariation] = useState(false)
   const [boardResetKey, setBoardResetKey] = useState(0)
 
   const [error, setError] = useState<string | null>(null)
-  const [showBranches, setShowBranches] = useState(false)
   const [conflictWarnings, setConflictWarnings] = useState<ConflictInfo[]>([])
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
+  const [sessionVariationQueue, setSessionVariationQueue] = useState<SessionVariationQueueItem[]>([])
 
   const [statsKey, setStatsKey] = useState(0)
   const [selectedRunPriority, setSelectedRunPriority] = useState<0 | 1 | 2 | null>(null)
@@ -132,13 +140,9 @@ function App() {
     setWrongGuessTick(0)
     setRevealedAnswer(false)
     setInlineDetour(null)
-    setIsReplayingVariation(false)
-    setShowBranches(false)
-    visitedDetourForksRef.current = new Set()
-    queuedRetryDetoursRef.current = []
-    failedDetoursForRunRef.current = []
-    mainlineFailedThisRunRef.current = false
-    immediateDetourReplayRef.current = false
+    setIsRetryingVariation(false)
+    activeVariationScoreRef.current = null
+    activeVariationLeadInRef.current = []
     detourWrongCountRef.current = 0
     mainlineWrongCountRef.current = new Map()
   }
@@ -249,6 +253,7 @@ function App() {
     setSelectedChapter(chaptersToLoad[0] ?? null)
     setActivePlayerColor(playerColor)
     setSelectedStudyId(studyId ?? null)
+    setSessionVariationQueue([])
     setError(null)
   }
 
@@ -278,27 +283,6 @@ function App() {
     return line
   }, [selectedChapter])
 
-  const branchForks = useMemo(() => {
-    if (!selectedChapter) return []
-    const forks: { moveNumber: number; side: 'w' | 'b'; mainSan: string; alts: MoveNode[] }[] = []
-
-    function walk(nodes: MoveNode[], plyFromStart: number) {
-      for (let index = 0; index < nodes.length; index++) {
-        const node = nodes[index]
-        if (index === 0 && nodes.length > 1) {
-          const moveNum = Math.ceil(plyFromStart / 2)
-          const side = plyFromStart % 2 === 1 ? 'w' : 'b'
-          forks.push({ moveNumber: moveNum, side, mainSan: node.san, alts: nodes.slice(1) })
-        }
-        walk(node.children, plyFromStart + 1)
-      }
-    }
-
-    const startColor = selectedChapter.startFen.split(' ')[1] as 'w' | 'b'
-    walk(selectedChapter.moves, startColor === 'w' ? 1 : 2)
-    return forks
-  }, [selectedChapter])
-
   const totalDue = useMemo(() => {
     const scores = loadScores()
     const now = Date.now()
@@ -317,6 +301,76 @@ function App() {
     setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
     setBoardResetKey(key => key + 1)
   }, [quizMode, selectedChapter, mainline, userColor, trainingSessionKey])
+
+  useEffect(() => {
+    if (!quizMode || !selectedChapter) return
+    const chapterForQueue = selectedChapter
+    const quizStartIndex = findQuizStartMoveIndex(chapterForQueue, mainline, userColor)
+    const sessionStartPly = quizStartIndex + 1
+    const sessionStartFen = quizStartIndex === -1
+      ? chapterForQueue.startFen
+      : (mainline[quizStartIndex]?.fen ?? chapterForQueue.startFen)
+
+    const queue: SessionVariationQueueItem[] = []
+
+    function walkForQueue(parentFen: string, nodes: MoveNode[], plyFromStart: number, pathFromStart: FlatMove[]) {
+      if (nodes.length === 0) return
+
+      const alternatives = nodes.slice(1)
+      if (alternatives.length > 0) {
+        const queuedAlternatives = selectedStudyId
+          ? [...alternatives]
+            .map(alternative => ({
+              alternative,
+              sortKey: alternativeSortKey(selectedStudyId, chapterForQueue, parentFen, alternative),
+            }))
+            .filter(item => selectedRunPriority === null || item.sortKey.priority === selectedRunPriority)
+            .sort((left, right) => {
+              if (left.sortKey.priority !== right.sortKey.priority) return left.sortKey.priority - right.sortKey.priority
+              if (left.sortKey.dueAt !== right.sortKey.dueAt) return left.sortKey.dueAt - right.sortKey.dueAt
+              return left.alternative.san.localeCompare(right.alternative.san)
+            })
+            .map(item => item.alternative)
+          : alternatives
+
+        if (queuedAlternatives.length > 0) {
+          const detourSequence = buildVariationSessionSequence(queuedAlternatives)
+          const firstAlternative = detourSequence[0]
+          if (firstAlternative) {
+            const leadInLine = pathFromStart.slice(sessionStartPly)
+            queue.push({
+              forkMainlineIndex: Math.max(0, plyFromStart - 1),
+              startFen: sessionStartFen,
+              forkFen: parentFen,
+              scoreFirstSan: firstAlternative.san,
+              leadInLine,
+              pendingInlines: detourSequence.slice(1),
+              detourLine: flattenDetour(firstAlternative),
+              isIndependent: Boolean(firstAlternative.independent),
+              label: firstAlternative.san,
+            })
+          }
+        }
+      }
+
+      for (const node of nodes) {
+        walkForQueue(node.fen, node.children, plyFromStart + 1, [
+          ...pathFromStart,
+          {
+            fen: node.fen,
+            san: node.san,
+            comment: node.comment,
+            annotation: node.annotation,
+          },
+        ])
+      }
+    }
+
+    const startColor = chapterForQueue.startFen.split(' ')[1] as 'w' | 'b'
+    walkForQueue(chapterForQueue.startFen, chapterForQueue.moves, startColor === 'w' ? 1 : 2, [])
+
+    setSessionVariationQueue(queue)
+  }, [quizMode, selectedChapter, selectedStudyId, selectedRunPriority, mainline, userColor])
 
   useKeyboardNavigation({
     quizMode,
@@ -337,43 +391,12 @@ function App() {
         const wrongs = detourWrongCountRef.current
         const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 3 : 1
 
-        if (!isReplayingVariation && repeatFailedVariationsEnabled && wrongs > 0 && !isIndependent) {
-          const retryId = buildDetourRetryId(forkMainlineIndex, detourLine)
-          const alreadyQueued = failedDetoursForRunRef.current.some(retry => retry.retryId === retryId)
-          if (!alreadyQueued) {
-            failedDetoursForRunRef.current.push({
-              forkFen,
-              forkMainlineIndex,
-              detourLine: [...detourLine],
-              isIndependent: inlineDetour.isIndependent,
-              retryId,
-            })
-          }
-        }
-
-        if (!isReplayingVariation && selectedStudyId && selectedChapter) {
-          const chapterIndex = chapters.indexOf(selectedChapter)
-          const detourLeaf = detourLine[detourLine.length - 1]
-          recordReview(
-            chapterId(selectedStudyId, chapters, chapterIndex),
-            variationLineId(forkFen, detourLine[0].san, detourLeaf.fen),
-            detourLine[0].san,
-            quality,
-            spacedRepetitionIntensity
-          )
-          void persistReviewData()
-        }
-
-        const timeout = setTimeout(() => {
-          setQuizWrong(null)
-          setBoardResetKey(key => key + 1)
-          const replayingMainline = isReplayingVariation && !immediateDetourReplayRef.current && moveIndex < mainline.length - 1
-
-          // Failed independent variations should redo immediately before moving on.
-          if (!isReplayingVariation && repeatFailedVariationsEnabled && wrongs > 0 && isIndependent) {
-            detourWrongCountRef.current = 0
-            immediateDetourReplayRef.current = true
-            setIsReplayingVariation(true)
+        if (repeatFailedVariationsEnabled && wrongs > 0 && !isRetryingVariation) {
+          const timeout = setTimeout(() => {
+            setQuizWrong(null)
+            setRevealedAnswer(false)
+            setBoardResetKey(key => key + 1)
+            setIsRetryingVariation(true)
             setInlineDetour({
               forkFen,
               forkMainlineIndex,
@@ -382,60 +405,58 @@ function App() {
               detourIndex: -1,
               isIndependent,
             })
-            return
-          }
+          }, VARIATION_COMPLETE_DELAY_MS)
+
+          return () => clearTimeout(timeout)
+        }
+
+        if (selectedStudyId && selectedChapter) {
+          const chapterIndex = chapters.indexOf(selectedChapter)
+          const detourLeaf = detourLine[detourLine.length - 1]
+          const scoreMeta = activeVariationScoreRef.current
+          const scoreForkFen = scoreMeta?.forkFen ?? forkFen
+          const scoreFirstSan = scoreMeta?.firstSan ?? detourLine[0].san
+          recordReview(
+            chapterId(selectedStudyId, chapters, chapterIndex),
+            variationLineId(scoreForkFen, scoreFirstSan, detourLeaf.fen),
+            scoreFirstSan,
+            quality,
+            spacedRepetitionIntensity
+          )
+          void persistReviewData()
+        }
+
+        const timeout = setTimeout(() => {
+          setQuizWrong(null)
+          setRevealedAnswer(false)
+          setBoardResetKey(key => key + 1)
 
           if (pendingInlines.length > 0) {
             const nextRoot = pendingInlines[0]
             if (!nextRoot) return
             detourWrongCountRef.current = 0
-            immediateDetourReplayRef.current = false
-            if (!replayingMainline) {
-              setIsReplayingVariation(false)
-            }
+            setIsRetryingVariation(false)
             setInlineDetour({
               forkFen,
               forkMainlineIndex,
               pendingInlines: pendingInlines.slice(1),
-              detourLine: flattenDetour(nextRoot),
+              detourLine: [...activeVariationLeadInRef.current, ...flattenDetour(nextRoot)],
               detourIndex: -1,
               isIndependent: Boolean(nextRoot.independent),
             })
-          } else {
-            if (!isReplayingVariation) {
-              // One training run should complete exactly one variation bundle.
-              visitedDetourForksRef.current.add(forkMainlineIndex)
-              immediateDetourReplayRef.current = false
-              setIsReplayingVariation(false)
-              setInlineDetour(null)
-              setQuizDone(true)
-              return
-            }
-
-            const replayingMainline = isReplayingVariation && moveIndex < mainline.length - 1
-            if (!replayingMainline) {
-              const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
-              if (nextQueuedRetry) {
-                detourWrongCountRef.current = 0
-                immediateDetourReplayRef.current = false
-                setIsReplayingVariation(true)
-                setInlineDetour({
-                  forkFen: nextQueuedRetry.forkFen,
-                  forkMainlineIndex: nextQueuedRetry.forkMainlineIndex,
-                  pendingInlines: [],
-                  detourLine: nextQueuedRetry.detourLine,
-                  detourIndex: -1,
-                  isIndependent: nextQueuedRetry.isIndependent,
-                })
-                return
+            const currentScoreMeta = activeVariationScoreRef.current
+            if (currentScoreMeta) {
+              activeVariationScoreRef.current = {
+                forkFen: currentScoreMeta.forkFen,
+                firstSan: nextRoot.san,
               }
             }
-            visitedDetourForksRef.current.add(forkMainlineIndex)
-            if (!replayingMainline) {
-              immediateDetourReplayRef.current = false
-              setIsReplayingVariation(false)
-            }
+          } else {
+            detourWrongCountRef.current = 0
+            setIsRetryingVariation(false)
             setInlineDetour(null)
+            activeVariationScoreRef.current = null
+            activeVariationLeadInRef.current = []
           }
         }, VARIATION_COMPLETE_DELAY_MS)
 
@@ -457,112 +478,36 @@ function App() {
     const fen = moveIndex === -1 ? selectedChapter.startFen : mainline[moveIndex]?.fen
     if (!fen) return
 
-    const nextIndex = moveIndex + 1
-    if (nextIndex >= mainline.length) {
-      recordMainlineReview()
-
-      const hasMainlineFailure = repeatFailedVariationsEnabled && mainlineFailedThisRunRef.current
-      const postponedSidelineRetries = repeatFailedVariationsEnabled ? [...queuedRetryDetoursRef.current] : []
-      const failedSidelineRetries = repeatFailedVariationsEnabled ? [...failedDetoursForRunRef.current] : []
-      const detoursToRetry = [...postponedSidelineRetries, ...failedSidelineRetries]
-
-      queuedRetryDetoursRef.current = []
-      failedDetoursForRunRef.current = []
-
-      if (repeatFailedVariationsEnabled && (hasMainlineFailure || detoursToRetry.length > 0)) {
-        const timeout = setTimeout(() => {
-          mainlineFailedThisRunRef.current = false
-          mainlineWrongCountRef.current = new Map()
-          setQuizWrong(null)
-          setRevealedAnswer(false)
-
-          if (hasMainlineFailure) {
-            queuedRetryDetoursRef.current = detoursToRetry
-            immediateDetourReplayRef.current = false
-            setIsReplayingVariation(true)
-            setInlineDetour(null)
-            setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
-            setBoardResetKey(key => key + 1)
-            return
-          }
-
-          const [firstRetry, ...restRetries] = detoursToRetry
-          if (firstRetry) {
-            queuedRetryDetoursRef.current = restRetries
-            detourWrongCountRef.current = 0
-            immediateDetourReplayRef.current = false
-            setIsReplayingVariation(true)
-            setInlineDetour({
-              forkFen: firstRetry.forkFen,
-              forkMainlineIndex: firstRetry.forkMainlineIndex,
-              pendingInlines: [],
-              detourLine: firstRetry.detourLine,
-              detourIndex: -1,
-              isIndependent: firstRetry.isIndependent,
-            })
-            setBoardResetKey(key => key + 1)
-            return
-          }
-        }, VARIATION_COMPLETE_DELAY_MS)
-
-        return () => clearTimeout(timeout)
+    if (sessionVariationQueue.length > 0) {
+      const queued = sessionVariationQueue[0]
+      if (!queued) return
+      setSessionVariationQueue(previous => previous.slice(1))
+      activeVariationScoreRef.current = {
+        forkFen: queued.forkFen,
+        firstSan: queued.scoreFirstSan,
       }
-
-      immediateDetourReplayRef.current = false
-      setIsReplayingVariation(false)
-      setQuizDone(true)
+      activeVariationLeadInRef.current = queued.leadInLine
+      setInlineDetour({
+        forkFen: queued.startFen,
+        forkMainlineIndex: queued.forkMainlineIndex,
+        pendingInlines: queued.pendingInlines,
+        detourLine: [...queued.leadInLine, ...queued.detourLine],
+        detourIndex: -1,
+        isIndependent: queued.isIndependent,
+      })
+      detourWrongCountRef.current = 0
+      setIsRetryingVariation(false)
+      setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
+      setBoardResetKey(key => key + 1)
       return
     }
 
-    if (isReplayingVariation && moveIndex < mainline.length - 1) {
-      const queuedRetryIndex = queuedRetryDetoursRef.current.findIndex(retry => retry.forkMainlineIndex === nextIndex)
-      if (queuedRetryIndex >= 0) {
-        const [queuedRetry] = queuedRetryDetoursRef.current.splice(queuedRetryIndex, 1)
-        if (queuedRetry) {
-          setInlineDetour({
-            forkFen: queuedRetry.forkFen,
-            forkMainlineIndex: queuedRetry.forkMainlineIndex,
-            pendingInlines: [],
-            detourLine: queuedRetry.detourLine,
-            detourIndex: -1,
-            isIndependent: queuedRetry.isIndependent,
-          })
-          detourWrongCountRef.current = 0
-          return
-        }
-      }
-    }
-
-    if (!visitedDetourForksRef.current.has(nextIndex)) {
-      const queuedAlternatives = selectedStudyId
-        ? [...mainline[nextIndex].alternatives]
-          .map(alternative => ({
-            alternative,
-            sortKey: alternativeSortKey(selectedStudyId, selectedChapter, fen, alternative),
-          }))
-          .filter(item => selectedRunPriority === null || item.sortKey.priority === selectedRunPriority)
-          .sort((left, right) => {
-            if (left.sortKey.priority !== right.sortKey.priority) return left.sortKey.priority - right.sortKey.priority
-            if (left.sortKey.dueAt !== right.sortKey.dueAt) return left.sortKey.dueAt - right.sortKey.dueAt
-            return left.alternative.san.localeCompare(right.alternative.san)
-          })
-          .map(item => item.alternative)
-        : mainline[nextIndex].alternatives
-      if (queuedAlternatives.length > 0) {
-        const detourSequence = buildVariationSessionSequence(queuedAlternatives)
-        const firstAlternative = detourSequence[0]
-        if (!firstAlternative) return
-        setInlineDetour({
-          forkFen: fen,
-          forkMainlineIndex: nextIndex,
-          pendingInlines: detourSequence.slice(1),
-          detourLine: flattenDetour(firstAlternative),
-          detourIndex: -1,
-          isIndependent: Boolean(firstAlternative.independent),
-        })
-        detourWrongCountRef.current = 0
-        return
-      }
+    const nextIndex = moveIndex + 1
+    if (nextIndex >= mainline.length) {
+      recordMainlineReview()
+      setIsRetryingVariation(false)
+      setQuizDone(true)
+      return
     }
 
     const colorToMove = fen.split(' ')[1] as 'w' | 'b'
@@ -573,7 +518,7 @@ function App() {
       }, 700)
       return () => clearTimeout(timeout)
     }
-  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity, isReplayingVariation, selectedRunPriority])
+  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity, isRetryingVariation, selectedRunPriority, sessionVariationQueue])
 
   useEffect(() => {
     if (!quizDone) return
@@ -843,7 +788,6 @@ function App() {
       return true
     }
 
-    mainlineFailedThisRunRef.current = true
     mainlineWrongCountRef.current.set(nextIndex, (mainlineWrongCountRef.current.get(nextIndex) ?? 0) + 1)
     setQuizWrong(mainline[nextIndex].san)
     setWrongGuessTick(tick => tick + 1)
@@ -857,13 +801,12 @@ function App() {
       detourWrongCountRef.current = 99
     } else {
       const nextIndex = moveIndex + 1
-      mainlineFailedThisRunRef.current = true
       mainlineWrongCountRef.current.set(nextIndex, 99)
     }
   }
 
-  function skipReplayVariation() {
-    if (!isReplayingVariation || !selectedChapter || !selectedStudyId) return
+  function skipCurrentVariation() {
+    if (!inlineDetour || !selectedChapter || !selectedStudyId) return
 
     const chapterIndex = chapters.indexOf(selectedChapter)
     if (chapterIndex < 0) return
@@ -871,46 +814,48 @@ function App() {
     setQuizWrong(null)
     setRevealedAnswer(false)
 
-    if (inlineDetour) {
-      const detourLeaf = inlineDetour.detourLine[inlineDetour.detourLine.length - 1]
-      if (!detourLeaf) return
+    const detourLeaf = inlineDetour.detourLine[inlineDetour.detourLine.length - 1]
+    if (!detourLeaf) return
+    const scoreMeta = activeVariationScoreRef.current
+    const scoreForkFen = scoreMeta?.forkFen ?? inlineDetour.forkFen
+    const scoreFirstSan = scoreMeta?.firstSan ?? inlineDetour.detourLine[0].san
 
-      recordReview(
-        chapterId(selectedStudyId, chapters, chapterIndex),
-        variationLineId(inlineDetour.forkFen, inlineDetour.detourLine[0].san, detourLeaf.fen),
-        inlineDetour.detourLine[0].san,
-        5,
-        spacedRepetitionIntensity
-      )
-      void persistReviewData()
-      visitedDetourForksRef.current.add(inlineDetour.forkMainlineIndex)
-    } else {
-      // Mainline replay is active; skipping should exit it and move to queued sideline retries (if any).
-      mainlineFailedThisRunRef.current = false
-      mainlineWrongCountRef.current = new Map()
-    }
+    recordReview(
+      chapterId(selectedStudyId, chapters, chapterIndex),
+      variationLineId(scoreForkFen, scoreFirstSan, detourLeaf.fen),
+      scoreFirstSan,
+      1,
+      spacedRepetitionIntensity
+    )
+    void persistReviewData()
 
-    const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
-    if (nextQueuedRetry) {
+    const nextRoot = inlineDetour.pendingInlines[0]
+    if (nextRoot) {
       detourWrongCountRef.current = 0
-      immediateDetourReplayRef.current = false
-      setIsReplayingVariation(true)
+      setIsRetryingVariation(false)
       setInlineDetour({
-        forkFen: nextQueuedRetry.forkFen,
-        forkMainlineIndex: nextQueuedRetry.forkMainlineIndex,
-        pendingInlines: [],
-        detourLine: nextQueuedRetry.detourLine,
+        forkFen: inlineDetour.forkFen,
+        forkMainlineIndex: inlineDetour.forkMainlineIndex,
+        pendingInlines: inlineDetour.pendingInlines.slice(1),
+        detourLine: [...activeVariationLeadInRef.current, ...flattenDetour(nextRoot)],
         detourIndex: -1,
-        isIndependent: nextQueuedRetry.isIndependent,
+        isIndependent: Boolean(nextRoot.independent),
       })
+      if (scoreMeta) {
+        activeVariationScoreRef.current = {
+          forkFen: scoreMeta.forkFen,
+          firstSan: nextRoot.san,
+        }
+      }
       setBoardResetKey(key => key + 1)
       return
     }
 
-    immediateDetourReplayRef.current = false
-    setIsReplayingVariation(false)
+    detourWrongCountRef.current = 0
+    setIsRetryingVariation(false)
     setInlineDetour(null)
-    setQuizDone(true)
+    activeVariationScoreRef.current = null
+    activeVariationLeadInRef.current = []
     setBoardResetKey(key => key + 1)
   }
 
@@ -923,7 +868,7 @@ function App() {
   function requestResetScores() {
     setConfirmDialog({
       title: 'Reset all scores?',
-      message: 'This will permanently clear all review scores, due dates, streak activity, and replay tracking data for every chapter.',
+      message: 'This will permanently clear all review scores, due dates, streak activity, and variation retry data for every chapter.',
       confirmLabel: 'Reset scores',
       action: () => {
         importAllScores([])
@@ -1015,7 +960,7 @@ function App() {
             wrongGuessTick={wrongGuessTick}
             revealedAnswer={revealedAnswer}
             inlineDetour={inlineDetour}
-            isReplayingVariation={isReplayingVariation}
+            isRetryingVariation={isRetryingVariation}
             moveIndex={moveIndex}
             mainline={mainline}
             currentFen={currentFen}
@@ -1023,16 +968,17 @@ function App() {
             commentsVisible={commentsVisible}
             activePlayerColor={activePlayerColor}
             boardResetKey={boardResetKey}
-            branchForks={branchForks}
-            showBranches={showBranches}
+            queuePreview={sessionVariationQueue.slice(0, 5).map(item => ({
+              label: item.label,
+              forkMainlineIndex: item.forkMainlineIndex,
+            }))}
             onBackHome={() => {
               stopQuiz()
               setView('home')
             }}
             onMove={handleQuizMove}
-            onToggleBranches={() => setShowBranches(show => !show)}
             onRevealAnswer={revealAnswer}
-            onSkipReplayVariation={skipReplayVariation}
+            onSkipCurrentVariation={skipCurrentVariation}
           />
         )}
       </div>

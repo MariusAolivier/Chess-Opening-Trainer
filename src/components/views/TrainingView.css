@@ -42,7 +42,7 @@
   max-width: 340px;
 }
 
-.tv-replay-banner {
+.tv-retry-banner {
   width: 100%;
   max-width: 400px;
   display: flex;
@@ -56,13 +56,13 @@
   box-sizing: border-box;
 }
 
-.tv-replay-label {
+.tv-retry-label {
   color: #d8f0a4;
   font-size: 0.82rem;
   font-weight: 600;
 }
 
-.tv-replay-skip-btn {
+.tv-retry-skip-btn {
   padding: 3px 10px;
   border: 1px solid #7e8d4e;
   border-radius: 999px;
@@ -188,66 +188,61 @@
   line-height: 1.5;
 }
 
-.tv-variations-root {
+.tv-queue-root {
   max-width: 400px;
   width: 100%;
 }
 
-.tv-variations-toggle {
+.tv-queue-title {
   font-size: 0.8rem;
-  padding: 4px 10px;
-  cursor: pointer;
-  width: 100%;
-  background: #2b2b2b;
-  color: #ccc;
-  border: 1px solid #444;
-  border-radius: 4px;
+  color: #bcbcbc;
+  margin-bottom: 6px;
+  font-weight: 600;
 }
 
-.tv-variations-list {
+.tv-queue-list {
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
   background: #1e1e1e;
-  border: 1px solid #fa8c8c;
-  border-top: none;
-  border-radius: 0 0 4px 4px;
-  padding: 8px;
+  border: 1px solid #3f5262;
+  border-radius: 6px;
   font-size: 0.8rem;
   color: #ccc;
 }
 
-.tv-variation-item {
-  margin-bottom: 8px;
-  padding-bottom: 8px;
+.tv-queue-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 0;
 }
 
-.tv-variation-item-divider {
-  border-bottom: 1px solid #333;
+.tv-queue-item:not(:last-child) {
+  border-bottom: 1px solid #2d2d2d;
 }
 
-.tv-move-prefix {
-  color: #888;
+.tv-queue-rank {
+  width: 1.4rem;
+  color: #8f8f8f;
 }
 
-.tv-main-san {
-  color: #fff;
+.tv-queue-label {
+  color: #f0f0f0;
+  font-weight: 600;
 }
 
-.tv-mainline-label {
-  color: #888;
+.tv-queue-meta {
+  margin-left: auto;
+  color: #8f8f8f;
+  font-size: 0.75rem;
 }
 
-.tv-alt-line {
-  margin-top: 3px;
-  padding-left: 12px;
-}
-
-.tv-alt-dot-inline {
-  color: #f0c040;
-}
-
-.tv-alt-dot-independent {
-  color: #60adf0;
-}
-
-.tv-alt-type {
-  color: #888;
+.tv-queue-empty {
+  padding: 8px 10px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #8f8f8f;
+  background: #1b1b1b;
+  font-size: 0.8rem;
 }
