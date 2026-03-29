@@ -78,6 +78,12 @@
   min-height: 1.2em;
 }
 
+.tv-variation-name {
+  margin-top: 4px;
+  font-size: 0.76rem;
+  color: #8b94b5;
+}
+
 @keyframes tv-board-shake {
   0%,
   100% {

@@ -111,6 +111,14 @@ export default function TrainingView({
     return fenBeforeMove.split(' ')[1] as 'w' | 'b'
   }
 
+  function formatBranchLabel(parentFen: string, san: string): string {
+    const parts = parentFen.split(' ')
+    const sideToMove = parts[1] as 'w' | 'b' | undefined
+    const fullmove = Number.parseInt(parts[5] ?? '', 10)
+    if (!Number.isFinite(fullmove) || fullmove <= 0) return san
+    return sideToMove === 'b' ? `${fullmove}... ${san}` : `${fullmove}. ${san}`
+  }
+
   const mainlineTotalForUser = selectedChapter
     ? countMovesForSide(selectedChapter.startFen, mainline, userColor)
     : 0
@@ -130,6 +138,10 @@ export default function TrainingView({
     : moveIndex === -1
       ? undefined
       : mainline[moveIndex]?.annotation
+
+  const variationName = inlineDetour?.detourLine[0]?.san
+    ? `Variation ${formatBranchLabel(inlineDetour.forkFen, inlineDetour.detourLine[0].san)}`
+    : null
 
   return (
     <div className="tv-root">
@@ -158,6 +170,9 @@ export default function TrainingView({
               <span className="tv-progress-count">
                 ({detourDoneForUser}/{detourTotalForUser})
               </span>
+              {variationName && (
+                <div className="tv-variation-name">{variationName}</div>
+              )}
             </>
           ) : (
             <>
