@@ -69,8 +69,18 @@ type VariationType = 'main' | 'sideline' | 'independent'
 
 interface ChapterVariationDetail {
   lineId: string
-  branchMove: string
+  branchLabel: string
   type: VariationType
+}
+
+function formatBranchLabel(parentFen: string, san: string): string {
+  const parts = parentFen.split(' ')
+  const sideToMove = parts[1] as 'w' | 'b' | undefined
+  const fullmove = Number.parseInt(parts[5] ?? '', 10)
+
+  if (!Number.isFinite(fullmove) || fullmove <= 0) return san
+  if (sideToMove === 'b') return `${fullmove}... ${san}`
+  return `${fullmove}. ${san}`
 }
 
 function collectChapterVariationDetails(chapter: Chapter): ChapterVariationDetail[] {
@@ -94,7 +104,7 @@ function collectChapterVariationDetails(chapter: Chapter): ChapterVariationDetai
       const leaf = leafOnPrimaryPath(alternative)
       details.push({
         lineId: variationLineId(parentFen, alternative.san, leaf.fen),
-        branchMove: alternative.san,
+        branchLabel: formatBranchLabel(parentFen, alternative.san),
         type: alternative.independent ? 'independent' : 'sideline',
       })
 
@@ -114,7 +124,7 @@ function collectChapterVariationDetails(chapter: Chapter): ChapterVariationDetai
   }
 
   if (mainLeaf) {
-    details.push({ lineId: mainlineLineId(mainLeaf.fen), branchMove: 'Main line', type: 'main' })
+    details.push({ lineId: mainlineLineId(mainLeaf.fen), branchLabel: 'Main line', type: 'main' })
   }
 
   walk(chapter.moves, chapter.startFen)
@@ -331,7 +341,7 @@ export default function RepertoirePanel({
                               <div key={`${cid}-${variationIndex}`} className="rp-variation-row">
                                 <div className="rp-variation-head">
                                   <span className="rp-variation-name">
-                                    Variation #{variationIndex + 1} {variation.branchMove}
+                                    Variation #{variationIndex + 1} {variation.branchLabel}
                                     {variation.type === 'sideline' && <span className="rp-variation-tag rp-variation-tag-sideline">sideline</span>}
                                     {variation.type === 'independent' && <span className="rp-variation-tag rp-variation-tag-independent">independent</span>}
                                   </span>
