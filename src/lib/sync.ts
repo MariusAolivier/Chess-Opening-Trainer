@@ -23,6 +23,76 @@ const scoresDoc = doc(db, 'app', 'scores')
 const forkMainlinesDoc = doc(db, 'app', 'forkMainlines')
 const reviewActivityDoc = doc(db, 'app', 'reviewActivity')
 
+function isNewScoreLineId(lineId: string): boolean {
+  return lineId.startsWith('main::') || lineId.startsWith('var::')
+}
+
+function legacyScoreLineId(lineId: string): string {
+  if (lineId.startsWith('main::')) return lineId.slice('main::'.length)
+  if (lineId.startsWith('var::')) {
+    const lastSep = lineId.lastIndexOf('::')
+    if (lastSep > 0) return lineId.slice(lastSep + 2)
+  }
+  return lineId
+}
+
+function scoreRecency(record: ScoreRecord): number {
+  const reviewed = record.lastReviewedAt ? Date.parse(record.lastReviewedAt) : Number.NaN
+  if (!Number.isNaN(reviewed)) return reviewed
+  const due = Date.parse(record.dueDate)
+  if (!Number.isNaN(due)) return due
+  return 0
+}
+
+function pickNewerScore(left: ScoreRecord, right: ScoreRecord): ScoreRecord {
+  return scoreRecency(right) >= scoreRecency(left) ? right : left
+}
+
+function collapseRemoteScoreRecords(records: ScoreRecord[]): ScoreRecord[] {
+  // Group by chapter + legacy identity, then prefer new-format ids when available.
+  const byLegacy = new Map<string, ScoreRecord[]>()
+  records.forEach(record => {
+    if (!record || typeof record.chapterId !== 'string' || typeof record.lineId !== 'string') return
+    const legacyId = legacyScoreLineId(record.lineId)
+    const key = `${record.chapterId}||${legacyId}`
+    const list = byLegacy.get(key) ?? []
+    list.push(record)
+    byLegacy.set(key, list)
+  })
+
+  const collapsed: ScoreRecord[] = []
+  byLegacy.forEach(group => {
+    const newFormat = group.filter(record => isNewScoreLineId(record.lineId))
+    const source = newFormat.length > 0 ? newFormat : group
+    const chosen = source.reduce((best, current) => pickNewerScore(best, current))
+    collapsed.push(chosen)
+  })
+
+  return collapsed
+}
+
+function expandScoresForUpload(records: ScoreRecord[]): ScoreRecord[] {
+  // Keep canonical records and add legacy mirrors so older cached clients can still sync.
+  const byId = new Map<string, ScoreRecord>()
+
+  records.forEach(record => {
+    if (!record || typeof record.chapterId !== 'string' || typeof record.lineId !== 'string') return
+    const key = `${record.chapterId}||${record.lineId}`
+    const existing = byId.get(key)
+    byId.set(key, existing ? pickNewerScore(existing, record) : record)
+
+    if (isNewScoreLineId(record.lineId)) {
+      const legacyId = legacyScoreLineId(record.lineId)
+      const mirror: ScoreRecord = { ...record, lineId: legacyId }
+      const mirrorKey = `${mirror.chapterId}||${mirror.lineId}`
+      const existingMirror = byId.get(mirrorKey)
+      byId.set(mirrorKey, existingMirror ? pickNewerScore(existingMirror, mirror) : mirror)
+    }
+  })
+
+  return [...byId.values()]
+}
+
 type FirestoreStudy = {
   id: string
   name: string
@@ -168,7 +238,7 @@ export async function deleteStudyRemote(studyId: string, studyName?: string): Pr
 }
 
 export async function uploadScores(): Promise<void> {
-  await setDoc(scoresDoc, { records: loadScores() })
+  await setDoc(scoresDoc, { records: expandScoresForUpload(loadScores()) })
 }
 
 export async function uploadForkMainlines(): Promise<void> {
@@ -253,7 +323,7 @@ export async function fetchAndMerge(): Promise<boolean> {
 
   // Overwrite scores if Firestore has them
   if (scoresSnap.exists()) {
-    const remoteRecords = (scoresSnap.data().records ?? []) as ScoreRecord[]
+    const remoteRecords = collapseRemoteScoreRecords((scoresSnap.data().records ?? []) as ScoreRecord[])
     if (remoteRecords.length > 0) {
       importAllScores(remoteRecords)
       changed = true
@@ -298,7 +368,7 @@ export function subscribeToScores(onChange: () => void): () => void {
     // Skip the immediate echo of our own writes
     if (isFirst) { isFirst = false; return }
     if (!snapshot.exists()) return
-    const records = (snapshot.data().records ?? []) as ScoreRecord[]
+    const records = collapseRemoteScoreRecords((snapshot.data().records ?? []) as ScoreRecord[])
     importAllScores(records)
     onChange()
   })
