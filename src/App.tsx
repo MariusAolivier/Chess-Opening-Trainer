@@ -6,7 +6,7 @@ import StreakAnimation from './components/StreakAnimation'
 import HomeView from './components/views/HomeView'
 import RepertoireView from './components/views/RepertoireView'
 import TrainingView from './components/views/TrainingView'
-import { parseStudy, parseStudies, type Chapter, type MoveNode, extractForkMoves, extractLines, mainlineLineId, variationLineId } from './lib/pgn'
+import { parseStudyWithWarnings, parseStudiesWithWarnings, type Chapter, type MoveNode, extractForkMoves, extractLines, mainlineLineId, variationLineId } from './lib/pgn'
 import {
   loadStudies,
   saveStudy,
@@ -99,6 +99,7 @@ function App() {
   const [quizWrong, setQuizWrong] = useState<string | null>(null)
   const [wrongGuessTick, setWrongGuessTick] = useState(0)
   const [revealedAnswer, setRevealedAnswer] = useState(false)
+  const [trainingSessionKey, setTrainingSessionKey] = useState(0)
   const [inlineDetour, setInlineDetour] = useState<InlineDetour | null>(null)
   const [isReplayingVariation, setIsReplayingVariation] = useState(false)
   const [boardResetKey, setBoardResetKey] = useState(0)
@@ -125,38 +126,31 @@ function App() {
   const [lichessSyncing, setLichessSyncing] = useState(false)
   const [lichessUsername, setLichessUsername] = useState<string | null>(null)
 
+  function buildParseWarningMessage(messages: string[]): string {
+    if (messages.length === 0) return ''
+    const unique = Array.from(new Set(messages))
+    const preview = unique.slice(0, 3).join(' ')
+    const more = unique.length > 3 ? ` (+${unique.length - 3} more)` : ''
+    return `Warning: Deep variation nesting detected. ${preview}${more}`
+  }
+
   function buildDetourRetryId(forkMainlineIndex: number, detourLine: FlatMove[]): string {
     const firstSan = detourLine[0]?.san ?? ''
     const leafFen = detourLine[detourLine.length - 1]?.fen ?? ''
     return `${forkMainlineIndex}::${variationLineId('', firstSan, leafFen)}`
   }
 
-  function collectDescendantAlternatives(root: MoveNode): MoveNode[] {
-    const descendants: MoveNode[] = []
+  function buildVariationSessionSequence(roots: MoveNode[]): MoveNode[] {
+    const first = roots[0]
+    if (!first) return []
 
-    function collectRoots(roots: MoveNode[]) {
-      roots.forEach(node => {
-        descendants.push(node)
-        descendants.push(...collectDescendantAlternatives(node))
-      })
+    if (first.independent) {
+      // Only short sidelines from the same branch point are attached ahead of this independent line.
+      const taggedSidelines = roots.filter(node => !node.independent)
+      return [...taggedSidelines, first]
     }
 
-    let node: MoveNode | undefined = root
-    while (node) {
-      collectRoots(node.children.slice(1))
-      node = node.children[0]
-    }
-
-    return descendants
-  }
-
-  function buildPendingDetours(roots: MoveNode[]): MoveNode[] {
-    const queue: MoveNode[] = []
-    roots.forEach(root => {
-      queue.push(root)
-      queue.push(...collectDescendantAlternatives(root))
-    })
-    return queue
+    return [first]
   }
 
   function findScoreForLine(chapterScores: ReturnType<typeof loadScores>, chapterScoreId: string, lineId: string) {
@@ -403,7 +397,7 @@ function App() {
     if (!quizMode || !selectedChapter) return
     setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
     setBoardResetKey(key => key + 1)
-  }, [quizMode, selectedChapter, mainline, userColor])
+  }, [quizMode, selectedChapter, mainline, userColor, trainingSessionKey])
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -494,12 +488,22 @@ function App() {
             setInlineDetour({
               forkFen,
               forkMainlineIndex,
-              pendingInlines: [...collectDescendantAlternatives(nextRoot), ...pendingInlines.slice(1)],
+              pendingInlines: pendingInlines.slice(1),
               detourLine: flattenDetour(nextRoot),
               detourIndex: -1,
               isIndependent: Boolean(nextRoot.independent),
             })
           } else {
+            if (!isReplayingVariation) {
+              // One training run should complete exactly one variation bundle.
+              visitedDetourForksRef.current.add(forkMainlineIndex)
+              immediateDetourReplayRef.current = false
+              setIsReplayingVariation(false)
+              setInlineDetour(null)
+              setQuizDone(true)
+              return
+            }
+
             const replayingMainline = isReplayingVariation && moveIndex < mainline.length - 1
             if (!replayingMainline) {
               const nextQueuedRetry = queuedRetryDetoursRef.current.shift()
@@ -637,12 +641,13 @@ function App() {
           .map(item => item.alternative)
         : mainline[nextIndex].alternatives
       if (queuedAlternatives.length > 0) {
-        const firstAlternative = queuedAlternatives[0]
+        const detourSequence = buildVariationSessionSequence(queuedAlternatives)
+        const firstAlternative = detourSequence[0]
         if (!firstAlternative) return
         setInlineDetour({
           forkFen: fen,
           forkMainlineIndex: nextIndex,
-          pendingInlines: [...collectDescendantAlternatives(firstAlternative), ...buildPendingDetours(queuedAlternatives.slice(1))],
+          pendingInlines: detourSequence.slice(1),
           detourLine: flattenDetour(firstAlternative),
           detourIndex: -1,
           isIndependent: Boolean(firstAlternative.independent),
@@ -681,9 +686,14 @@ function App() {
     reader.onload = loaded => {
       try {
         const pgn = loaded.target?.result as string
-        const { name: parsedName, chapters: parsedChapters } = parseStudy(pgn)
+        const { name: parsedName, chapters: parsedChapters, warnings } = parseStudyWithWarnings(pgn)
         const studyName = parsedName ?? file.name.replace(/\.pgn$/i, '')
         const imported = importSingleStudy(studyName, parsedChapters, uploadColor)
+
+        const warningMessage = buildParseWarningMessage(warnings.map(warning => warning.message))
+        if (warningMessage) {
+          setError(warningMessage)
+        }
 
         Promise.all([uploadStudy(imported.stored), uploadScores(), uploadForkMainlines()])
           .then(() => {
@@ -741,7 +751,8 @@ function App() {
     setLichessUsername(account.username)
 
     const exportPgn = await exportLichessStudiesPgn(accessToken, account.username)
-    const parsedStudies = parseStudies(exportPgn)
+    const parsed = parseStudiesWithWarnings(exportPgn)
+    const parsedStudies = parsed.studies
     const studiesToSync = parsedStudies
       .filter(study => !study.name.startsWith('/'))
       .map(study => ({
@@ -749,6 +760,11 @@ function App() {
         chapters: study.chapters.filter(chapter => !chapter.title.trimStart().startsWith('***')),
       }))
       .filter(study => study.chapters.length > 0)
+
+    const warningMessage = buildParseWarningMessage(parsed.warnings.map(warning => warning.message))
+    if (warningMessage) {
+      setError(warningMessage)
+    }
 
     if (parsedStudies.length === 0) {
       return
@@ -900,6 +916,7 @@ function App() {
     loadChapters(study.chapters, study.playerColor, study.id)
     setSelectedChapter(chapter)
     setSelectedRunPriority(runPriority)
+    setTrainingSessionKey(key => key + 1)
     setQuizMode(true)
     resetTrainingProgress()
     setStatsKey(key => key + 1)

@@ -71,6 +71,12 @@ export interface ParsedStudy {
   chapters: Chapter[]
 }
 
+export interface ParseWarning {
+  chapterTitle: string
+  variationNesting: number
+  message: string
+}
+
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 
 /**
@@ -80,7 +86,13 @@ const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
  * the same parent position as that move. So both the main-line move and each
  * variation's first move are children of the parent position node.
  */
-function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[] {
+function buildLine(
+  parentFen: string,
+  moves: PgnMove[],
+  chess: Chess,
+  variationNesting: number,
+  maxVariationNestingRef?: { current: number },
+): MoveNode[] {
   if (moves.length === 0) return []
 
   const [move, ...rest] = moves
@@ -95,7 +107,7 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
     fen,
     comment: [move.commentMove, move.commentAfter].filter(Boolean).join(' ') || undefined,
     annotation: annotationFromMove(move.notation.notation, move.nag),
-    children: buildLine(fen, rest, chess),
+    children: buildLine(fen, rest, chess, variationNesting, maxVariationNestingRef),
   }
 
   // Each variation is an alternative to `move` played from `parentFen`
@@ -106,7 +118,12 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
     const varResult = chess.move(varFirst.notation.notation)
     if (!varResult) return []
     const varFen = chess.fen()
-    const altChildren = buildLine(varFen, varRest, chess)
+    const nestedLevel = variationNesting + 1
+    if (maxVariationNestingRef) {
+      maxVariationNestingRef.current = Math.max(maxVariationNestingRef.current, nestedLevel)
+    }
+
+    const altChildren = buildLine(varFen, varRest, chess, nestedLevel, maxVariationNestingRef)
     const depth = 1 + lineDepth(altChildren)
     return [{
       san: varFirst.notation.notation,
@@ -114,7 +131,8 @@ function buildLine(parentFen: string, moves: PgnMove[], chess: Chess): MoveNode[
       comment: [varFirst.commentMove, varFirst.commentAfter].filter(Boolean).join(' ') || undefined,
       annotation: annotationFromMove(varFirst.notation.notation, varFirst.nag),
       children: altChildren,
-      independent: depth > INLINE_MAX_DEPTH,
+      // Branches inside variations become independent roots so short sidelines stay attached to them.
+      independent: variationNesting > 0 || depth > INLINE_MAX_DEPTH,
     } satisfies MoveNode]
   })
 
@@ -246,6 +264,11 @@ export function extractForkMoves(chapter: Chapter): Map<string, string> {
  * Also extracts the StudyName tag (present in Lichess exports) as the study name.
  */
 export function parseStudy(pgn: string): { name: string | null; chapters: Chapter[] } {
+  const parsed = parseStudyWithWarnings(pgn)
+  return { name: parsed.name, chapters: parsed.chapters }
+}
+
+export function parseStudyWithWarnings(pgn: string): { name: string | null; chapters: Chapter[]; warnings: ParseWarning[] } {
   const games = parseGames(pgn)
   const chess = new Chess()
 
@@ -253,22 +276,35 @@ export function parseStudy(pgn: string): { name: string | null; chapters: Chapte
   const firstTags = games[0]?.tags as Record<string, string> | undefined
   const name = firstTags?.StudyName ?? null
 
+  const warnings: ParseWarning[] = []
+
   const chapters = games.map(game => {
     const tags = game.tags as Record<string, string> | undefined
     const title = tags?.ChapterName ?? tags?.Event ?? 'Untitled'
     const startFen = tags?.FEN ?? START_FEN
+    const maxVariationNestingRef = { current: 0 }
 
     chess.load(startFen)
+
+    const moves = pruneSingleMoveBranches(buildLine(startFen, game.moves as PgnMove[], chess, 0, maxVariationNestingRef))
+
+    if (maxVariationNestingRef.current > 3) {
+      warnings.push({
+        chapterTitle: title,
+        variationNesting: maxVariationNestingRef.current,
+        message: `Chapter "${title}" has variation nesting depth ${maxVariationNestingRef.current} (more than 3).`,
+      })
+    }
 
     return {
       title,
       startFen,
       startComment: game.gameComment?.comment,
-      moves: pruneSingleMoveBranches(buildLine(startFen, game.moves as PgnMove[], chess)),
+      moves,
     }
   })
 
-  return { name, chapters }
+  return { name, chapters, warnings }
 }
 
 /**
@@ -276,22 +312,36 @@ export function parseStudy(pgn: string): { name: string | null; chapters: Chapte
  * Chapters are grouped by StudyName when present (Lichess bulk export).
  */
 export function parseStudies(pgn: string): ParsedStudy[] {
+  return parseStudiesWithWarnings(pgn).studies
+}
+
+export function parseStudiesWithWarnings(pgn: string): { studies: ParsedStudy[]; warnings: ParseWarning[] } {
   const games = parseGames(pgn)
   const chess = new Chess()
   const grouped = new Map<string, Chapter[]>()
+  const warnings: ParseWarning[] = []
 
   games.forEach(game => {
     const tags = game.tags as Record<string, string> | undefined
     const studyName = (tags?.StudyName ?? 'Lichess Study').trim() || 'Lichess Study'
     const title = tags?.ChapterName ?? tags?.Event ?? 'Untitled'
     const startFen = tags?.FEN ?? START_FEN
+    const maxVariationNestingRef = { current: 0 }
 
     chess.load(startFen)
     const chapter: Chapter = {
       title,
       startFen,
       startComment: game.gameComment?.comment,
-      moves: pruneSingleMoveBranches(buildLine(startFen, game.moves as PgnMove[], chess)),
+      moves: pruneSingleMoveBranches(buildLine(startFen, game.moves as PgnMove[], chess, 0, maxVariationNestingRef)),
+    }
+
+    if (maxVariationNestingRef.current > 3) {
+      warnings.push({
+        chapterTitle: title,
+        variationNesting: maxVariationNestingRef.current,
+        message: `Chapter "${title}" has variation nesting depth ${maxVariationNestingRef.current} (more than 3).`,
+      })
     }
 
     const chapters = grouped.get(studyName)
@@ -302,5 +352,8 @@ export function parseStudies(pgn: string): ParsedStudy[] {
     }
   })
 
-  return [...grouped.entries()].map(([name, chapters]) => ({ name, chapters }))
+  return {
+    studies: [...grouped.entries()].map(([name, chapters]) => ({ name, chapters })),
+    warnings,
+  }
 }
