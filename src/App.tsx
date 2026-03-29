@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Chess } from 'chess.js'
 import './App.css'
 import ConfirmDialog, { type ConfirmDialogState } from './components/ConfirmDialog'
@@ -41,14 +41,11 @@ import {
   getReviewStreak,
 } from './lib/scores'
 import {
-  fetchAndMerge,
   uploadStudy,
   deleteStudyRemote,
   uploadScores,
   uploadForkMainlines,
   uploadReviewActivity,
-  subscribeToScores,
-  subscribeToReviewActivity,
 } from './lib/sync'
 import {
   HOME_FENS,
@@ -61,21 +58,24 @@ import {
   type MainlineMove,
 } from './lib/training'
 import {
-  beginLichessOAuthLoginAndSync,
-  clearLichessToken,
-  completeLichessOAuthFromUrl,
   exportLichessStudiesPgn,
   fetchLichessAccount,
-  loadLichessToken,
 } from './lib/lichess'
-
-const STREAK_SHOWN_KEY = 'chess-opening-trainer:streak-shown-day'
-const VARIATION_COMPLETE_DELAY_MS = 1000
-
-function todayDayKey(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+import {
+  STREAK_SHOWN_KEY,
+  VARIATION_COMPLETE_DELAY_MS,
+  buildDetourRetryId,
+  buildParseWarningMessage,
+  buildVariationSessionSequence,
+  chapterConflictMap,
+  colorFromLichessStudyName,
+  findScoreForLine,
+  pickNextChapterForTraining,
+  todayDayKey,
+} from './lib/appHelpers'
+import { useInitialSync } from './hooks/useInitialSync'
+import { useKeyboardNavigation } from './hooks/useKeyboardNavigation'
+import { useLichessSync } from './hooks/useLichessSync'
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -123,53 +123,7 @@ function App() {
   const [commentsVisible, setCommentsVisible] = useState(() => loadCommentsVisible())
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
   const [showStreakAnimation, setShowStreakAnimation] = useState<number | null>(null)
-  const [lichessSyncing, setLichessSyncing] = useState(false)
   const [lichessUsername, setLichessUsername] = useState<string | null>(null)
-
-  function buildParseWarningMessage(messages: string[]): string {
-    if (messages.length === 0) return ''
-    const unique = Array.from(new Set(messages))
-    const preview = unique.slice(0, 3).join(' ')
-    const more = unique.length > 3 ? ` (+${unique.length - 3} more)` : ''
-    return `Warning: Deep variation nesting detected. ${preview}${more}`
-  }
-
-  function buildDetourRetryId(forkMainlineIndex: number, detourLine: FlatMove[]): string {
-    const firstSan = detourLine[0]?.san ?? ''
-    const leafFen = detourLine[detourLine.length - 1]?.fen ?? ''
-    return `${forkMainlineIndex}::${variationLineId('', firstSan, leafFen)}`
-  }
-
-  function buildVariationSessionSequence(roots: MoveNode[]): MoveNode[] {
-    const first = roots[0]
-    if (!first) return []
-
-    if (first.independent) {
-      // Only short sidelines from the same branch point are attached ahead of this independent line.
-      const taggedSidelines = roots.filter(node => !node.independent)
-      return [...taggedSidelines, first]
-    }
-
-    return [first]
-  }
-
-  function findScoreForLine(chapterScores: ReturnType<typeof loadScores>, chapterScoreId: string, lineId: string) {
-    const exact = chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === lineId)
-    if (exact) return exact
-
-    if (lineId.startsWith('main::')) {
-      const legacy = lineId.slice('main::'.length)
-      return chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === legacy)
-    }
-
-    if (lineId.startsWith('var::')) {
-      const lastSep = lineId.lastIndexOf('::')
-      const legacy = lastSep > 0 ? lineId.slice(lastSep + 2) : lineId
-      return chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === legacy)
-    }
-
-    return undefined
-  }
 
   function resetTrainingProgress() {
     setMoveIndex(-1)
@@ -203,7 +157,7 @@ function App() {
     setStatsKey(key => key + 1)
   }
 
-  function migrateLegacyChapterIdsForStudies(studiesToMigrate: StoredStudy[]): boolean {
+  const migrateLegacyChapterIdsForStudies = useCallback((studiesToMigrate: StoredStudy[]): boolean => {
     const remap = new Map<string, string>()
 
     studiesToMigrate.forEach(study => {
@@ -214,7 +168,7 @@ function App() {
     })
 
     return remapChapterIds(remap)
-  }
+  }, [])
 
   function recordMainlineReview() {
     if (!selectedStudyId || !selectedChapter) return
@@ -302,48 +256,13 @@ function App() {
     setQuizMode(false)
     resetTrainingProgress()
   }
-
-  useEffect(() => {
-    setSyncStatus('syncing')
-    fetchAndMerge()
-      .then(changed => {
-        const mergedStudies = loadStudies()
-        const migrated = migrateLegacyChapterIdsForStudies(mergedStudies)
-        setSyncStatus('ok')
-        setStoredStudies(mergedStudies)
-        if (changed || migrated) {
-          setStatsKey(key => key + 1)
-        }
-        if (migrated) {
-          uploadScores()
-          uploadForkMainlines()
-        }
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error('[sync] fetchAndMerge failed:', err)
-        setSyncStatus('error')
-        setSyncError(message)
-      })
-
-    const unsubScores = subscribeToScores(() => {
-      const studies = loadStudies()
-      const migrated = migrateLegacyChapterIdsForStudies(studies)
-      if (migrated) {
-        uploadScores()
-        uploadForkMainlines()
-      }
-      setStatsKey(key => key + 1)
-    })
-    const unsubReviewActivity = subscribeToReviewActivity(() => {
-      setStatsKey(key => key + 1)
-    })
-
-    return () => {
-      unsubScores()
-      unsubReviewActivity()
-    }
-  }, [])
+  useInitialSync({
+    setSyncStatus,
+    setSyncError,
+    setStoredStudies,
+    setStatsKey,
+    migrateLegacyChapterIdsForStudies,
+  })
 
   const userColor = useMemo(() => (activePlayerColor === 'white' ? 'w' : 'b'), [activePlayerColor])
 
@@ -399,22 +318,11 @@ function App() {
     setBoardResetKey(key => key + 1)
   }, [quizMode, selectedChapter, mainline, userColor, trainingSessionKey])
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (quizMode) return
-      const tag = (event.target as HTMLElement).tagName
-      if (tag === 'SELECT' || tag === 'INPUT') return
-
-      if (event.key === 'ArrowRight') {
-        setMoveIndex(index => Math.min(index + 1, mainline.length - 1))
-      } else if (event.key === 'ArrowLeft') {
-        setMoveIndex(index => Math.max(index - 1, -1))
-      }
-    }
-
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [mainline, quizMode])
+  useKeyboardNavigation({
+    quizMode,
+    maxMoveIndex: mainline.length - 1,
+    setMoveIndex,
+  })
 
   useEffect(() => {
     if (!quizMode || !selectedChapter || quizDone) return
@@ -716,7 +624,7 @@ function App() {
     event.target.value = ''
   }
 
-  function importSingleStudy(studyName: string, parsedChapters: Chapter[], playerColor: 'white' | 'black'): { stored: StoredStudy } {
+  const importSingleStudy = useCallback((studyName: string, parsedChapters: Chapter[], playerColor: 'white' | 'black'): { stored: StoredStudy } => {
     const stored = saveStudy(studyName, playerColor, parsedChapters)
     migrateLegacyChapterIdsForStudies([stored])
 
@@ -729,24 +637,13 @@ function App() {
     })
 
     const allStudies = loadStudies()
-    const allChaptersMap = new Map<string, string>()
-    allStudies.forEach(study => {
-      study.chapters.forEach((chapter, chapterIndex) => {
-        allChaptersMap.set(chapterId(study.id, study.chapters, chapterIndex), `${study.name} · ${chapter.title}`)
-      })
-    })
-
-    setConflictWarnings(findConflicts(allChaptersMap))
+    setConflictWarnings(findConflicts(chapterConflictMap(allStudies)))
     setStoredStudies(allStudies)
 
     return { stored }
-  }
+  }, [migrateLegacyChapterIdsForStudies])
 
-  async function runLichessSync(accessToken: string): Promise<void> {
-    function colorFromLichessStudyName(studyName: string): 'white' | 'black' {
-      return studyName.trimStart().toLocaleLowerCase().startsWith('(black)') ? 'black' : 'white'
-    }
-
+  const runLichessSync = useCallback(async (accessToken: string): Promise<void> => {
     const account = await fetchLichessAccount(accessToken)
     setLichessUsername(account.username)
 
@@ -785,69 +682,14 @@ function App() {
       uploadScores(),
       uploadForkMainlines(),
     ])
-  }
+  }, [importSingleStudy])
 
-  async function handleSyncWithLichess() {
-    if (lichessSyncing) return
-    setLichessSyncing(true)
-    setError(null)
-
-    try {
-      const existingToken = loadLichessToken()
-      if (!existingToken) {
-        await beginLichessOAuthLoginAndSync()
-        return
-      }
-
-      await runLichessSync(existingToken)
-      setSyncStatus('ok')
-      setSyncError(null)
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
-      setError(message)
-      setSyncStatus('error')
-      setSyncError(message)
-    } finally {
-      setLichessSyncing(false)
-    }
-  }
-
-  function startLichessSyncFromToken(accessToken: string) {
-    setLichessSyncing(true)
-    runLichessSync(accessToken)
-      .then(() => {
-        setSyncStatus('ok')
-        setSyncError(null)
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err)
-        if (message.includes('expired')) {
-          clearLichessToken()
-        }
-        setError(message)
-        setSyncStatus('error')
-        setSyncError(message)
-      })
-      .finally(() => setLichessSyncing(false))
-  }
-
-  useEffect(() => {
-    completeLichessOAuthFromUrl()
-      .then(result => {
-        if (result?.shouldSync) {
-          startLichessSyncFromToken(result.accessToken)
-          return
-        }
-
-        const existingToken = loadLichessToken()
-        if (!existingToken) return
-        startLichessSyncFromToken(existingToken)
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err)
-        setError(message)
-      })
-  }, [])
+  const { lichessSyncing, handleSyncWithLichess } = useLichessSync({
+    runLichessSync,
+    setError,
+    setSyncStatus,
+    setSyncError,
+  })
 
   function requestDeleteStudy(id: string) {
     const study = storedStudies.find(item => item.id === id)
@@ -924,82 +766,9 @@ function App() {
   }
 
   function pickAndTrainNext() {
-    if (storedStudies.length === 0) return
-
-    const scores = loadScores()
-    const now = Date.now()
-    const allEntries: Array<{ study: StoredStudy; chapterIndex: number; cid: string }> = []
-
-    storedStudies.forEach(study => {
-      study.chapters.forEach((_, chapterIndex) => {
-        const cid = chapterId(study.id, study.chapters, chapterIndex)
-        if (selectedChapterIds.size > 0 && !selectedChapterIds.has(cid)) return
-        allEntries.push({ study, chapterIndex, cid })
-      })
-    })
-
-    if (allEntries.length === 0) return
-
-    if (selectedChapterIds.size > 0) {
-      const allScores = loadScores()
-      const pickOrder = allEntries
-        .map(entry => {
-          const chapter = entry.study.chapters[entry.chapterIndex]
-          const chapterLines = chapter ? extractLines(chapter, entry.study.playerColor) : []
-          const chapterScores = allScores.filter(score => score.chapterId === entry.cid)
-
-          const hasNotReviewed = chapterLines.some(line => {
-            const lineScore = findScoreForLine(chapterScores, entry.cid, line.lineId)
-            return !lineScore || !lineScore.lastReviewedAt || lineScore.interval <= 0
-          })
-
-          const hasDue = chapterLines.some(line => {
-            const lineScore = findScoreForLine(chapterScores, entry.cid, line.lineId)
-            if (!lineScore || !lineScore.lastReviewedAt || lineScore.interval <= 0) return false
-            const dueAt = Date.parse(lineScore.dueDate)
-            return !Number.isNaN(dueAt) && dueAt <= now
-          })
-
-          const nextDueAt = chapterLines.reduce((earliest, line) => {
-            const lineScore = findScoreForLine(chapterScores, entry.cid, line.lineId)
-            if (!lineScore || !lineScore.lastReviewedAt || lineScore.interval <= 0) return earliest
-            const dueAt = Date.parse(lineScore.dueDate)
-            if (Number.isNaN(dueAt)) return earliest
-            return Math.min(earliest, dueAt)
-          }, Number.POSITIVE_INFINITY)
-
-          const priority = hasNotReviewed ? 0 : hasDue ? 1 : 2
-
-          return {
-            entry,
-            priority,
-            nextDueAt,
-            studyName: entry.study.name.toLocaleLowerCase(),
-            chapterTitle: (entry.study.chapters[entry.chapterIndex]?.title ?? '').toLocaleLowerCase(),
-          }
-        })
-        .sort((left, right) => {
-          if (left.priority !== right.priority) return left.priority - right.priority
-          if (left.nextDueAt !== right.nextDueAt) return left.nextDueAt - right.nextDueAt
-          if (left.studyName !== right.studyName) return left.studyName.localeCompare(right.studyName)
-          if (left.chapterTitle !== right.chapterTitle) return left.chapterTitle.localeCompare(right.chapterTitle)
-          return left.entry.cid.localeCompare(right.entry.cid)
-        })
-
-      const picked = pickOrder[0]
-      if (!picked) return
-      trainChapter(picked.entry.study, picked.entry.chapterIndex, picked.priority as 0 | 1 | 2)
-      return
-    }
-
-    const dueEntries = allEntries.filter(({ study, chapterIndex }) => {
-      const cid = chapterId(study.id, study.chapters, chapterIndex)
-      return scores.some(score => score.chapterId === cid && new Date(score.dueDate).getTime() <= now)
-    })
-
-    const pool = dueEntries.length > 0 ? dueEntries : allEntries
-    const picked = pool[Math.floor(Math.random() * pool.length)]
-    trainChapter(picked.study, picked.chapterIndex, null)
+    const picked = pickNextChapterForTraining(storedStudies, selectedChapterIds, Date.now(), loadScores())
+    if (!picked) return
+    trainChapter(picked.study, picked.chapterIndex, picked.priority)
   }
 
   function trainFromSelection() {
