@@ -180,22 +180,32 @@ export function extractTrainableLines(chapter: Chapter, playerColor?: 'white' | 
     return node
   }
 
-  let nodes = chapter.moves
-  let mainlineLeaf: MoveNode | null = null
-  let currentFen = chapter.startFen
+  function walk(nodes: MoveNode[], parentFen: string) {
+    if (nodes.length === 0) return
 
-  while (nodes.length > 0) {
-    const sideToMove = currentFen.split(' ')[1] as 'w' | 'b'
+    const sideToMove = parentFen.split(' ')[1] as 'w' | 'b'
     for (let index = 1; index < nodes.length; index += 1) {
       const alternative = nodes[index]
-      if (userColor !== null && sideToMove === userColor) continue
-      const leaf = leafOnPrimaryPath(alternative)
-      addLine(variationLineId(currentFen, alternative.san, leaf.fen), alternative.san, 1 + lineDepth(alternative.children))
+      if (!(userColor !== null && sideToMove === userColor)) {
+        const leaf = leafOnPrimaryPath(alternative)
+        addLine(variationLineId(parentFen, alternative.san, leaf.fen), alternative.san, 1 + lineDepth(alternative.children))
+      }
+
+      // Include branches within branches.
+      walk(alternative.children, alternative.fen)
     }
 
     const main = nodes[0]
+    walk(main.children, main.fen)
+  }
+
+  walk(chapter.moves, chapter.startFen)
+
+  let nodes = chapter.moves
+  let mainlineLeaf: MoveNode | null = null
+  while (nodes.length > 0) {
+    const main = nodes[0]
     mainlineLeaf = main
-    currentFen = main.fen
     nodes = main.children
   }
 

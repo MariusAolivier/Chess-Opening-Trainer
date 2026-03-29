@@ -264,6 +264,25 @@
   white-space: nowrap;
 }
 
+.rp-variation-tag {
+  margin-left: 6px;
+  font-size: 0.62rem;
+  border-radius: 8px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.rp-variation-tag-sideline {
+  color: #b9c9ef;
+  background: #334571;
+}
+
+.rp-variation-tag-independent {
+  color: #f0c1ef;
+  background: #5f3a61;
+}
+
 .rp-variation-due {
   color: #8e95b7;
   font-size: 0.66rem;

@@ -131,6 +131,34 @@ function App() {
     return `${forkMainlineIndex}::${variationLineId('', firstSan, leafFen)}`
   }
 
+  function collectDescendantAlternatives(root: MoveNode): MoveNode[] {
+    const descendants: MoveNode[] = []
+
+    function collectRoots(roots: MoveNode[]) {
+      roots.forEach(node => {
+        descendants.push(node)
+        descendants.push(...collectDescendantAlternatives(node))
+      })
+    }
+
+    let node: MoveNode | undefined = root
+    while (node) {
+      collectRoots(node.children.slice(1))
+      node = node.children[0]
+    }
+
+    return descendants
+  }
+
+  function buildPendingDetours(roots: MoveNode[]): MoveNode[] {
+    const queue: MoveNode[] = []
+    roots.forEach(root => {
+      queue.push(root)
+      queue.push(...collectDescendantAlternatives(root))
+    })
+    return queue
+  }
+
   function findScoreForLine(chapterScores: ReturnType<typeof loadScores>, chapterScoreId: string, lineId: string) {
     const exact = chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === lineId)
     if (exact) return exact
@@ -456,6 +484,8 @@ function App() {
           }
 
           if (pendingInlines.length > 0) {
+            const nextRoot = pendingInlines[0]
+            if (!nextRoot) return
             detourWrongCountRef.current = 0
             immediateDetourReplayRef.current = false
             if (!replayingMainline) {
@@ -464,10 +494,10 @@ function App() {
             setInlineDetour({
               forkFen,
               forkMainlineIndex,
-              pendingInlines: pendingInlines.slice(1),
-              detourLine: flattenDetour(pendingInlines[0]),
+              pendingInlines: [...collectDescendantAlternatives(nextRoot), ...pendingInlines.slice(1)],
+              detourLine: flattenDetour(nextRoot),
               detourIndex: -1,
-              isIndependent: Boolean(pendingInlines[0]?.independent),
+              isIndependent: Boolean(nextRoot.independent),
             })
           } else {
             const replayingMainline = isReplayingVariation && moveIndex < mainline.length - 1
@@ -607,13 +637,15 @@ function App() {
           .map(item => item.alternative)
         : mainline[nextIndex].alternatives
       if (queuedAlternatives.length > 0) {
+        const firstAlternative = queuedAlternatives[0]
+        if (!firstAlternative) return
         setInlineDetour({
           forkFen: fen,
           forkMainlineIndex: nextIndex,
-          pendingInlines: queuedAlternatives.slice(1),
-          detourLine: flattenDetour(queuedAlternatives[0]),
+          pendingInlines: [...collectDescendantAlternatives(firstAlternative), ...buildPendingDetours(queuedAlternatives.slice(1))],
+          detourLine: flattenDetour(firstAlternative),
           detourIndex: -1,
-          isIndependent: Boolean(queuedAlternatives[0]?.independent),
+          isIndependent: Boolean(firstAlternative.independent),
         })
         detourWrongCountRef.current = 0
         return

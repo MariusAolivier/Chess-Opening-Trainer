@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { extractTrainableLines } from '../lib/pgn'
+import { extractTrainableLines, mainlineLineId, variationLineId, type Chapter, type MoveNode } from '../lib/pgn'
 import { loadScores, type ScoreRecord } from '../lib/scores'
 import { chapterId, type StoredStudy } from '../lib/storage'
 import './RepertoirePanel.css'
@@ -63,6 +63,62 @@ function formatVariationDue(score: ScoreRecord | undefined, now: number): string
   const days = Math.max(0, Math.ceil((dueAt - now) / 86_400_000))
   if (days === 0) return 'due now'
   return `due in ${days} day${days === 1 ? '' : 's'}`
+}
+
+type VariationType = 'main' | 'sideline' | 'independent'
+
+interface ChapterVariationDetail {
+  lineId: string
+  branchMove: string
+  type: VariationType
+}
+
+function collectChapterVariationDetails(chapter: Chapter): ChapterVariationDetail[] {
+  const details: ChapterVariationDetail[] = []
+
+  function leafOnPrimaryPath(root: MoveNode): MoveNode {
+    let node = root
+    while (node.children.length > 0) {
+      node = node.children[0]
+    }
+    return node
+  }
+
+  function walk(nodes: MoveNode[], parentFen: string) {
+    if (nodes.length === 0) return
+
+    const main = nodes[0]
+
+    for (let index = 1; index < nodes.length; index += 1) {
+      const alternative = nodes[index]
+      const leaf = leafOnPrimaryPath(alternative)
+      details.push({
+        lineId: variationLineId(parentFen, alternative.san, leaf.fen),
+        branchMove: alternative.san,
+        type: alternative.independent ? 'independent' : 'sideline',
+      })
+
+      // Include branches inside branches (nested variations).
+      walk(alternative.children, alternative.fen)
+    }
+
+    walk(main.children, main.fen)
+  }
+
+  let nodes = chapter.moves
+  let mainLeaf: MoveNode | null = null
+  while (nodes.length > 0) {
+    const main = nodes[0]
+    mainLeaf = main
+    nodes = main.children
+  }
+
+  if (mainLeaf) {
+    details.push({ lineId: mainlineLineId(mainLeaf.fen), branchMove: 'Main line', type: 'main' })
+  }
+
+  walk(chapter.moves, chapter.startFen)
+  return details
 }
 
 export default function RepertoirePanel({
@@ -177,6 +233,7 @@ export default function RepertoirePanel({
                 {study.chapters.map((chapter, chapterIndex) => {
                   const cid = chapterId(study.id, study.chapters, chapterIndex)
                   const chapterLines = extractTrainableLines(chapter, study.playerColor)
+                  const chapterVariationDetails = collectChapterVariationDetails(chapter)
                   const chapterScores = scoresByChapter.get(cid) ?? []
                   const chapterTotalMoves = chapterLines.reduce((sum, line) => sum + line.plyCount, 0)
                   const chapterCompletedMoves = chapterLines
@@ -262,18 +319,22 @@ export default function RepertoirePanel({
                       </div>
                       {chapterExpanded && (
                         <div className="rp-variation-list">
-                          {chapterLines.length === 0 ? (
+                          {chapterVariationDetails.length === 0 ? (
                             <div className="rp-variation-empty">No variations in this chapter.</div>
                           ) : (
-                            chapterLines.map((line, variationIndex) => {
-                              const lineScore = scoreForLine(chapterScores, line.lineId)
+                            chapterVariationDetails.map((variation, variationIndex) => {
+                              const lineScore = scoreForLine(chapterScores, variation.lineId)
                               const completed = Boolean(lineScore && lineScore.interval > 0)
                               const dueLabel = formatVariationDue(lineScore, now)
 
                               return (
                               <div key={`${cid}-${variationIndex}`} className="rp-variation-row">
                                 <div className="rp-variation-head">
-                                  <span className="rp-variation-name">Variation #{variationIndex + 1} {line.displaySan}</span>
+                                  <span className="rp-variation-name">
+                                    Variation #{variationIndex + 1} {variation.branchMove}
+                                    {variation.type === 'sideline' && <span className="rp-variation-tag rp-variation-tag-sideline">sideline</span>}
+                                    {variation.type === 'independent' && <span className="rp-variation-tag rp-variation-tag-independent">independent</span>}
+                                  </span>
                                   <span className="rp-variation-due">{dueLabel}</span>
                                 </div>
                                 <div className="rp-variation-progress-wrap">
