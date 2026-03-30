@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { extractTrainableLines, mainlineLineId, variationLineId, type Chapter, type MoveNode } from '../lib/pgn'
+import { extractTrainableLines } from '../lib/pgn'
 import { loadScores, type ScoreRecord } from '../lib/scores'
 import { chapterId, type StoredStudy } from '../lib/storage'
+import { collectChapterVariationDetails } from '../lib/appHelpers'
 import './RepertoirePanel.css'
 
 function formatDueIn(scores: ScoreRecord[], now: number): string {
@@ -63,72 +64,6 @@ function formatVariationDue(score: ScoreRecord | undefined, now: number): string
   const days = Math.max(0, Math.ceil((dueAt - now) / 86_400_000))
   if (days === 0) return 'due now'
   return `due in ${days} day${days === 1 ? '' : 's'}`
-}
-
-type VariationType = 'main' | 'sideline' | 'independent'
-
-interface ChapterVariationDetail {
-  lineId: string
-  branchLabel: string
-  type: VariationType
-}
-
-function formatBranchLabel(parentFen: string, san: string): string {
-  const parts = parentFen.split(' ')
-  const sideToMove = parts[1] as 'w' | 'b' | undefined
-  const fullmove = Number.parseInt(parts[5] ?? '', 10)
-
-  if (!Number.isFinite(fullmove) || fullmove <= 0) return san
-  if (sideToMove === 'b') return `${fullmove}... ${san}`
-  return `${fullmove}. ${san}`
-}
-
-function collectChapterVariationDetails(chapter: Chapter): ChapterVariationDetail[] {
-  const details: ChapterVariationDetail[] = []
-
-  function leafOnPrimaryPath(root: MoveNode): MoveNode {
-    let node = root
-    while (node.children.length > 0) {
-      node = node.children[0]
-    }
-    return node
-  }
-
-  function walk(nodes: MoveNode[], parentFen: string) {
-    if (nodes.length === 0) return
-
-    const main = nodes[0]
-
-    for (let index = 1; index < nodes.length; index += 1) {
-      const alternative = nodes[index]
-      const leaf = leafOnPrimaryPath(alternative)
-      details.push({
-        lineId: variationLineId(parentFen, alternative.san, leaf.fen),
-        branchLabel: formatBranchLabel(parentFen, alternative.san),
-        type: alternative.independent ? 'independent' : 'sideline',
-      })
-
-      // Include branches inside branches (nested variations).
-      walk(alternative.children, alternative.fen)
-    }
-
-    walk(main.children, main.fen)
-  }
-
-  let nodes = chapter.moves
-  let mainLeaf: MoveNode | null = null
-  while (nodes.length > 0) {
-    const main = nodes[0]
-    mainLeaf = main
-    nodes = main.children
-  }
-
-  if (mainLeaf) {
-    details.push({ lineId: mainlineLineId(mainLeaf.fen), branchLabel: 'Main line', type: 'main' })
-  }
-
-  walk(chapter.moves, chapter.startFen)
-  return details
 }
 
 export default function RepertoirePanel({

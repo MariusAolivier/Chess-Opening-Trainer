@@ -134,7 +134,7 @@ export default function TrainingView({
       : mainline[moveIndex]?.annotation
 
   const variationName = inlineDetour?.detourLine[0]?.san
-    ? `Variation ${formatBranchLabel(inlineDetour.forkFen, inlineDetour.detourLine[0].san)}`
+    ? `Variation ${formatBranchLabel(inlineDetour.labelForkFen, inlineDetour.labelSan)}`
     : null
 
   return (

@@ -66,6 +66,8 @@ import {
   VARIATION_COMPLETE_DELAY_MS,
   buildParseWarningMessage,
   buildVariationSessionSequence,
+  collectChapterForkAlternatives,
+  collectChapterVariationDetails,
   chapterConflictMap,
   colorFromLichessStudyName,
   findScoreForLine,
@@ -77,7 +79,8 @@ import { useKeyboardNavigation } from './hooks/useKeyboardNavigation'
 import { useLichessSync } from './hooks/useLichessSync'
 
 function App() {
-  type SessionVariationQueueItem = {
+  type SessionVariationQueueVariationItem = {
+    kind: 'variation'
     forkMainlineIndex: number
     startFen: string
     forkFen: string
@@ -88,6 +91,14 @@ function App() {
     isIndependent: boolean
     label: string
   }
+
+  type SessionVariationQueueMainlineItem = {
+    kind: 'mainline'
+    forkMainlineIndex: number
+    label: string
+  }
+
+  type SessionVariationQueueItem = SessionVariationQueueVariationItem | SessionVariationQueueMainlineItem
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const detourWrongCountRef = useRef(0)
@@ -210,6 +221,26 @@ function App() {
     return { priority: 2, dueAt }
   }
 
+  function mainlineSortKey(studyId: string, chapter: Chapter): { priority: number; dueAt: number } {
+    const chapterIndex = chapters.indexOf(chapter)
+    if (chapterIndex < 0) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+
+    const leaf = mainline[mainline.length - 1]
+    if (!leaf) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+
+    const cid = chapterId(studyId, chapters, chapterIndex)
+    const score = findScoreForLine(loadScores(), cid, mainlineLineId(leaf.fen))
+    if (!score || !score.lastReviewedAt || score.interval <= 0) {
+      return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+    }
+
+    const dueAt = Date.parse(score.dueDate)
+    if (Number.isNaN(dueAt)) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+    if (dueAt <= Date.now()) return { priority: 1, dueAt }
+
+    return { priority: 2, dueAt }
+  }
+
   function maybeFireDailyChapterStreakAnimation() {
     const today = todayDayKey()
     if (localStorage.getItem(STREAK_SHOWN_KEY) === today) return
@@ -313,61 +344,86 @@ function App() {
 
     const queue: SessionVariationQueueItem[] = []
 
-    function walkForQueue(parentFen: string, nodes: MoveNode[], plyFromStart: number, pathFromStart: FlatMove[]) {
-      if (nodes.length === 0) return
+    const forkAlternatives = collectChapterForkAlternatives(chapterForQueue)
+    const alternativesByLineId = new Map<string, typeof forkAlternatives>()
+    forkAlternatives.forEach(item => {
+      const list = alternativesByLineId.get(item.lineId) ?? []
+      list.push(item)
+      alternativesByLineId.set(item.lineId, list)
+    })
 
-      const alternatives = nodes.slice(1)
-      if (alternatives.length > 0) {
-        const queuedAlternatives = selectedStudyId
-          ? [...alternatives]
-            .map(alternative => ({
-              alternative,
-              sortKey: alternativeSortKey(selectedStudyId, chapterForQueue, parentFen, alternative),
-            }))
-            .filter(item => selectedRunPriority === null || item.sortKey.priority === selectedRunPriority)
-            .sort((left, right) => {
-              if (left.sortKey.priority !== right.sortKey.priority) return left.sortKey.priority - right.sortKey.priority
-              if (left.sortKey.dueAt !== right.sortKey.dueAt) return left.sortKey.dueAt - right.sortKey.dueAt
-              return left.alternative.san.localeCompare(right.alternative.san)
-            })
-            .map(item => item.alternative)
-          : alternatives
+    const repertoireOrdered = collectChapterVariationDetails(chapterForQueue)
+      .filter(item => item.type !== 'main')
 
-        if (queuedAlternatives.length > 0) {
-          const detourSequence = buildVariationSessionSequence(queuedAlternatives)
-          const firstAlternative = detourSequence[0]
-          if (firstAlternative) {
-            const leadInLine = pathFromStart.slice(sessionStartPly)
-            queue.push({
-              forkMainlineIndex: Math.max(0, plyFromStart - 1),
-              startFen: sessionStartFen,
-              forkFen: parentFen,
-              scoreFirstSan: firstAlternative.san,
-              leadInLine,
-              pendingInlines: detourSequence.slice(1),
-              detourLine: flattenDetour(firstAlternative),
-              isIndependent: Boolean(firstAlternative.independent),
-              label: firstAlternative.san,
-            })
-          }
-        }
+    const orderedAlternatives = repertoireOrdered.flatMap(detail => {
+      const list = alternativesByLineId.get(detail.lineId)
+      if (!list || list.length === 0) return []
+      const next = list[0]
+      alternativesByLineId.set(detail.lineId, list.slice(1))
+      return [next]
+    })
+
+    const filteredAlternatives = selectedStudyId
+      ? orderedAlternatives
+        .map(item => ({
+          item,
+          sortKey: alternativeSortKey(selectedStudyId, chapterForQueue, item.forkFen, item.alternative),
+        }))
+        .filter(entry => selectedRunPriority === null || entry.sortKey.priority === selectedRunPriority)
+        .map(entry => entry.item)
+      : orderedAlternatives
+
+    const groupedByFork = new Map<string, typeof filteredAlternatives>()
+    filteredAlternatives.forEach(item => {
+      const pathKey = item.pathFromStart.map(move => move.fen).join('|')
+      const key = `${item.forkFen}::${item.forkMainlineIndex}::${pathKey}`
+      const list = groupedByFork.get(key) ?? []
+      list.push(item)
+      groupedByFork.set(key, list)
+    })
+
+    groupedByFork.forEach(group => {
+      if (group.length === 0) return
+
+      const orderedRoots = buildVariationSessionSequence(group.map(entry => entry.alternative))
+      const orderedEntries = orderedRoots
+        .map(root => group.find(entry => entry.alternative === root))
+        .filter((entry): entry is (typeof group)[number] => Boolean(entry))
+
+      const firstEntry = orderedEntries[0]
+      if (!firstEntry) return
+
+      const leadInLine = firstEntry.pathFromStart.slice(sessionStartPly)
+      queue.push({
+        kind: 'variation',
+        forkMainlineIndex: firstEntry.forkMainlineIndex,
+        startFen: sessionStartFen,
+        forkFen: firstEntry.forkFen,
+        scoreFirstSan: firstEntry.alternative.san,
+        leadInLine,
+        pendingInlines: orderedEntries.slice(1).map(entry => entry.alternative),
+        detourLine: flattenDetour(firstEntry.alternative),
+        isIndependent: firstEntry.type === 'independent',
+        label: firstEntry.alternative.san,
+      })
+    })
+
+    if (selectedStudyId) {
+      const mainSortKey = mainlineSortKey(selectedStudyId, chapterForQueue)
+      if (selectedRunPriority === null || mainSortKey.priority === selectedRunPriority) {
+        queue.push({
+          kind: 'mainline',
+          forkMainlineIndex: 0,
+          label: 'Main line',
+        })
       }
-
-      for (const node of nodes) {
-        walkForQueue(node.fen, node.children, plyFromStart + 1, [
-          ...pathFromStart,
-          {
-            fen: node.fen,
-            san: node.san,
-            comment: node.comment,
-            annotation: node.annotation,
-          },
-        ])
-      }
+    } else {
+      queue.push({
+        kind: 'mainline',
+        forkMainlineIndex: 0,
+        label: 'Main line',
+      })
     }
-
-    const startColor = chapterForQueue.startFen.split(' ')[1] as 'w' | 'b'
-    walkForQueue(chapterForQueue.startFen, chapterForQueue.moves, startColor === 'w' ? 1 : 2, [])
 
     setSessionVariationQueue(queue)
   }, [quizMode, selectedChapter, selectedStudyId, selectedRunPriority, mainline, userColor])
@@ -399,6 +455,8 @@ function App() {
             setIsRetryingVariation(true)
             setInlineDetour({
               forkFen,
+              labelForkFen: inlineDetour.labelForkFen,
+              labelSan: inlineDetour.labelSan,
               forkMainlineIndex,
               pendingInlines,
               detourLine,
@@ -438,6 +496,8 @@ function App() {
             setIsRetryingVariation(false)
             setInlineDetour({
               forkFen,
+              labelForkFen: inlineDetour.labelForkFen,
+              labelSan: nextRoot.san,
               forkMainlineIndex,
               pendingInlines: pendingInlines.slice(1),
               detourLine: [...activeVariationLeadInRef.current, ...flattenDetour(nextRoot)],
@@ -481,6 +541,10 @@ function App() {
     if (sessionVariationQueue.length > 0) {
       const queued = sessionVariationQueue[0]
       if (!queued) return
+      if (queued.kind === 'mainline') {
+        setSessionVariationQueue(previous => previous.slice(1))
+        return
+      }
       setSessionVariationQueue(previous => previous.slice(1))
       activeVariationScoreRef.current = {
         forkFen: queued.forkFen,
@@ -489,6 +553,8 @@ function App() {
       activeVariationLeadInRef.current = queued.leadInLine
       setInlineDetour({
         forkFen: queued.startFen,
+        labelForkFen: queued.forkFen,
+        labelSan: queued.scoreFirstSan,
         forkMainlineIndex: queued.forkMainlineIndex,
         pendingInlines: queued.pendingInlines,
         detourLine: [...queued.leadInLine, ...queued.detourLine],
@@ -835,6 +901,8 @@ function App() {
       setIsRetryingVariation(false)
       setInlineDetour({
         forkFen: inlineDetour.forkFen,
+        labelForkFen: inlineDetour.labelForkFen,
+        labelSan: nextRoot.san,
         forkMainlineIndex: inlineDetour.forkMainlineIndex,
         pendingInlines: inlineDetour.pendingInlines.slice(1),
         detourLine: [...activeVariationLeadInRef.current, ...flattenDetour(nextRoot)],

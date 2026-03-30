@@ -17,6 +17,8 @@ export type MainlineMove = {
 
 export type InlineDetour = {
   forkFen: string
+  labelForkFen: string
+  labelSan: string
   forkMainlineIndex: number
   pendingInlines: MoveNode[]
   detourLine: FlatMove[]

@@ -99,23 +99,7 @@ export function loadScores(): ScoreRecord[] {
 export function initScore(chapterId: string, lineId: string, displaySan: string): void {
   const records = load()
   if (records.some(r => r.chapterId === chapterId && r.lineId === lineId)) return
-
-  function legacyLineIdFromCurrent(currentLineId: string): string {
-    if (currentLineId.startsWith('main::')) return currentLineId.slice('main::'.length)
-    if (currentLineId.startsWith('var::')) {
-      const lastSep = currentLineId.lastIndexOf('::')
-      if (lastSep > 0) return currentLineId.slice(lastSep + 2)
-    }
-    return currentLineId
-  }
-
-  const legacyLineId = legacyLineIdFromCurrent(lineId)
-  const legacyRecord = records.find(r => r.chapterId === chapterId && r.lineId === legacyLineId)
-  if (legacyRecord) {
-    records.push({ ...legacyRecord, lineId, displaySan })
-  } else {
-    records.push({ chapterId, lineId, displaySan, ease: 2.5, interval: 0, dueDate: new Date().toISOString() })
-  }
+  records.push({ chapterId, lineId, displaySan, ease: 2.5, interval: 0, dueDate: new Date().toISOString() })
   save(records)
 }
 

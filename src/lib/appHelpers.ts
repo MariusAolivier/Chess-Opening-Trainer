@@ -1,5 +1,5 @@
 import type { Chapter, MoveNode } from './pgn'
-import { extractLines, variationLineId } from './pgn'
+import { extractLines, mainlineLineId, variationLineId } from './pgn'
 import type { ScoreRecord } from './scores'
 import type { StoredStudy } from './storage'
 import { chapterId } from './storage'
@@ -27,34 +27,125 @@ export function buildDetourRetryId(forkMainlineIndex: number, detourLine: FlatMo
   return `${forkMainlineIndex}::${variationLineId('', firstSan, leafFen)}`
 }
 
-export function buildVariationSessionSequence(roots: MoveNode[]): MoveNode[] {
-  const first = roots[0]
-  if (!first) return []
+export type VariationType = 'main' | 'sideline' | 'independent'
 
-  if (first.independent) {
-    const taggedSidelines = roots.filter(node => !node.independent)
-    return [...taggedSidelines, first]
+export interface ChapterVariationDetail {
+  lineId: string
+  branchLabel: string
+  type: VariationType
+}
+
+export interface ChapterForkAlternative {
+  lineId: string
+  branchLabel: string
+  type: Exclude<VariationType, 'main'>
+  forkFen: string
+  forkMainlineIndex: number
+  pathFromStart: FlatMove[]
+  alternative: MoveNode
+}
+
+function formatBranchLabel(parentFen: string, san: string): string {
+  const parts = parentFen.split(' ')
+  const sideToMove = parts[1] as 'w' | 'b' | undefined
+  const fullmove = Number.parseInt(parts[5] ?? '', 10)
+
+  if (!Number.isFinite(fullmove) || fullmove <= 0) return san
+  if (sideToMove === 'b') return `${fullmove}... ${san}`
+  return `${fullmove}. ${san}`
+}
+
+function leafOnPrimaryPath(root: MoveNode): MoveNode {
+  let node = root
+  while (node.children.length > 0) {
+    node = node.children[0]
+  }
+  return node
+}
+
+export function collectChapterForkAlternatives(chapter: Chapter): ChapterForkAlternative[] {
+  const details: ChapterForkAlternative[] = []
+
+  function walk(nodes: MoveNode[], parentFen: string, plyFromStart: number, pathFromStart: FlatMove[]) {
+    if (nodes.length === 0) return
+
+    for (let index = 1; index < nodes.length; index += 1) {
+      const alternative = nodes[index]
+      const leaf = leafOnPrimaryPath(alternative)
+      details.push({
+        lineId: variationLineId(parentFen, alternative.san, leaf.fen),
+        branchLabel: formatBranchLabel(parentFen, alternative.san),
+        type: alternative.independent ? 'independent' : 'sideline',
+        forkFen: parentFen,
+        forkMainlineIndex: Math.max(0, plyFromStart - 1),
+        pathFromStart,
+        alternative,
+      })
+
+      walk(alternative.children, alternative.fen, plyFromStart + 1, [
+        ...pathFromStart,
+        {
+          fen: alternative.fen,
+          san: alternative.san,
+          comment: alternative.comment,
+          annotation: alternative.annotation,
+        },
+      ])
+    }
+
+    const main = nodes[0]
+    walk(main.children, main.fen, plyFromStart + 1, [
+      ...pathFromStart,
+      {
+        fen: main.fen,
+        san: main.san,
+        comment: main.comment,
+        annotation: main.annotation,
+      },
+    ])
   }
 
-  return [first]
+  const startColor = chapter.startFen.split(' ')[1] as 'w' | 'b'
+  walk(chapter.moves, chapter.startFen, startColor === 'w' ? 1 : 2, [])
+
+  return details
+}
+
+export function collectChapterVariationDetails(chapter: Chapter): ChapterVariationDetail[] {
+  const details: ChapterVariationDetail[] = []
+
+  const forkAlternatives = collectChapterForkAlternatives(chapter)
+  forkAlternatives.forEach(item => {
+    details.push({ lineId: item.lineId, branchLabel: item.branchLabel, type: item.type })
+  })
+
+  let nodes = chapter.moves
+  let mainLeaf: MoveNode | null = null
+  while (nodes.length > 0) {
+    const main = nodes[0]
+    mainLeaf = main
+    nodes = main.children
+  }
+
+  if (mainLeaf) {
+    details.push({ lineId: mainlineLineId(mainLeaf.fen), branchLabel: 'Main line', type: 'main' })
+  }
+
+  return details
+}
+
+export function buildVariationSessionSequence(roots: MoveNode[]): MoveNode[] {
+  if (roots.length === 0) return []
+
+  // Queue every eligible branch. The independent flag controls ordering only,
+  // so no candidate variation is dropped from a session.
+  const inlineRoots = roots.filter(node => !node.independent)
+  const independentRoots = roots.filter(node => node.independent)
+  return [...inlineRoots, ...independentRoots]
 }
 
 export function findScoreForLine(chapterScores: ScoreRecord[], chapterScoreId: string, lineId: string): ScoreRecord | undefined {
-  const exact = chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === lineId)
-  if (exact) return exact
-
-  if (lineId.startsWith('main::')) {
-    const legacy = lineId.slice('main::'.length)
-    return chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === legacy)
-  }
-
-  if (lineId.startsWith('var::')) {
-    const lastSep = lineId.lastIndexOf('::')
-    const legacy = lastSep > 0 ? lineId.slice(lastSep + 2) : lineId
-    return chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === legacy)
-  }
-
-  return undefined
+  return chapterScores.find(score => score.chapterId === chapterScoreId && score.lineId === lineId)
 }
 
 export interface ChapterTrainingPick {
