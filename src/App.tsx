@@ -81,6 +81,7 @@ import { useLichessSync } from './hooks/useLichessSync'
 function App() {
   type SessionVariationQueueVariationItem = {
     kind: 'variation'
+    chapterTitle: string
     forkMainlineIndex: number
     startFen: string
     forkFen: string
@@ -94,11 +95,13 @@ function App() {
 
   type SessionVariationQueueMainlineItem = {
     kind: 'mainline'
+    chapterTitle: string
     forkMainlineIndex: number
     label: string
   }
 
   type SessionVariationQueueItem = SessionVariationQueueVariationItem | SessionVariationQueueMainlineItem
+  const MAX_QUEUE_SIZE = 10
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const detourWrongCountRef = useRef(0)
@@ -314,6 +317,98 @@ function App() {
     return line
   }, [selectedChapter])
 
+  const queuePreviewItems = useMemo(() => {
+    const scores = loadScores()
+    const now = Date.now()
+    const priorityOrder: Array<0 | 1 | 2> = [0, 1, 2]
+
+    function linePriorityInfo(cid: string, lineId: string): { priority: 0 | 1 | 2; dueAt: number } {
+      const score = findScoreForLine(scores, cid, lineId)
+      if (!score || !score.lastReviewedAt || score.interval <= 0) {
+        return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+      }
+      const dueAt = Date.parse(score.dueDate)
+      if (!Number.isNaN(dueAt) && dueAt <= now) return { priority: 1, dueAt }
+      return { priority: 2, dueAt: Number.POSITIVE_INFINITY }
+    }
+
+    const baseItems = sessionVariationQueue.slice(0, MAX_QUEUE_SIZE).map(item => ({
+      label: item.label,
+      chapterTitle: item.chapterTitle,
+      forkMainlineIndex: item.forkMainlineIndex,
+    }))
+
+    if (selectedChapterIds.size <= 1 || baseItems.length >= MAX_QUEUE_SIZE) {
+      return baseItems
+    }
+
+    const allSelectedEntries = storedStudies.flatMap(study =>
+      study.chapters
+        .map((chapter, chapterIndex) => ({
+          study,
+          chapter,
+          chapterIndex,
+          cid: chapterId(study.id, study.chapters, chapterIndex),
+        }))
+        .filter(entry => selectedChapterIds.has(entry.cid))
+    )
+
+    const ordered = allSelectedEntries.sort((left, right) => {
+      const leftStudy = left.study.name.toLocaleLowerCase()
+      const rightStudy = right.study.name.toLocaleLowerCase()
+      if (leftStudy !== rightStudy) return leftStudy.localeCompare(rightStudy)
+
+      const leftTitle = left.chapter.title.toLocaleLowerCase()
+      const rightTitle = right.chapter.title.toLocaleLowerCase()
+      if (leftTitle !== rightTitle) return leftTitle.localeCompare(rightTitle)
+
+      return left.cid.localeCompare(right.cid)
+    })
+
+    if (ordered.length <= 1) return baseItems
+
+    const projected = ordered.flatMap(entry => {
+      const forkAlternatives = collectChapterForkAlternatives(entry.chapter)
+      const forkByLineId = new Map(forkAlternatives.map(item => [item.lineId, item] as const))
+      const variationDetails = collectChapterVariationDetails(entry.chapter)
+
+      return variationDetails.map(detail => {
+        const fork = forkByLineId.get(detail.lineId)
+        const forkMainlineIndex = detail.type === 'main' ? 0 : (fork?.forkMainlineIndex ?? 0)
+        const priorityInfo = linePriorityInfo(entry.cid, detail.lineId)
+        return {
+          label: detail.branchLabel,
+          chapterTitle: entry.chapter.title,
+          forkMainlineIndex,
+          priority: priorityInfo.priority,
+          dueAt: priorityInfo.dueAt,
+          studyName: entry.study.name.toLocaleLowerCase(),
+          chapterName: entry.chapter.title.toLocaleLowerCase(),
+        }
+      })
+    })
+
+    const orderRank = new Map(priorityOrder.map((priority, index) => [priority, index] as const))
+    const orderedProjected = projected.sort((left, right) => {
+      const leftRank = orderRank.get(left.priority) ?? Number.MAX_SAFE_INTEGER
+      const rightRank = orderRank.get(right.priority) ?? Number.MAX_SAFE_INTEGER
+      if (leftRank !== rightRank) return leftRank - rightRank
+      if (left.priority === 1 && right.priority === 1 && left.dueAt !== right.dueAt) {
+        return left.dueAt - right.dueAt
+      }
+      if (left.studyName !== right.studyName) return left.studyName.localeCompare(right.studyName)
+      if (left.chapterName !== right.chapterName) return left.chapterName.localeCompare(right.chapterName)
+      if (left.label !== right.label) return left.label.localeCompare(right.label)
+      return left.forkMainlineIndex - right.forkMainlineIndex
+    })
+
+    return orderedProjected.slice(0, MAX_QUEUE_SIZE).map(item => ({
+      label: item.label,
+      chapterTitle: item.chapterTitle,
+      forkMainlineIndex: item.forkMainlineIndex,
+    }))
+  }, [sessionVariationQueue, selectedChapterIds, storedStudies, statsKey])
+
   const totalDue = useMemo(() => {
     const scores = loadScores()
     const now = Date.now()
@@ -363,15 +458,28 @@ function App() {
       return [next]
     })
 
-    const filteredAlternatives = selectedStudyId
-      ? orderedAlternatives
-        .map(item => ({
-          item,
-          sortKey: alternativeSortKey(selectedStudyId, chapterForQueue, item.forkFen, item.alternative),
-        }))
-        .filter(entry => selectedRunPriority === null || entry.sortKey.priority === selectedRunPriority)
-        .map(entry => entry.item)
-      : orderedAlternatives
+    const filteredAlternatives = (() => {
+      if (!selectedStudyId) return orderedAlternatives
+
+      const withPriority = orderedAlternatives.map(item => ({
+        item,
+        sortKey: alternativeSortKey(selectedStudyId, chapterForQueue, item.forkFen, item.alternative),
+      }))
+
+      const order: number[] = selectedRunPriority === null
+        ? [0, 1, 2]
+        : selectedRunPriority === 0
+          ? [0, 1, 2]
+          : selectedRunPriority === 1
+            ? [1, 2]
+            : [2]
+
+      return order.flatMap(priority =>
+        withPriority
+          .filter(entry => entry.sortKey.priority === priority)
+          .map(entry => entry.item)
+      )
+    })()
 
     const groupedByFork = new Map<string, typeof filteredAlternatives>()
     filteredAlternatives.forEach(item => {
@@ -396,6 +504,7 @@ function App() {
       const leadInLine = firstEntry.pathFromStart.slice(sessionStartPly)
       queue.push({
         kind: 'variation',
+        chapterTitle: chapterForQueue.title,
         forkMainlineIndex: firstEntry.forkMainlineIndex,
         startFen: sessionStartFen,
         forkFen: firstEntry.forkFen,
@@ -408,24 +517,35 @@ function App() {
       })
     })
 
-    if (selectedStudyId) {
+    if (!selectedStudyId) {
+      queue.push({
+        kind: 'mainline',
+        chapterTitle: chapterForQueue.title,
+        forkMainlineIndex: 0,
+        label: 'Main line',
+      })
+    } else {
       const mainSortKey = mainlineSortKey(selectedStudyId, chapterForQueue)
-      if (selectedRunPriority === null || mainSortKey.priority === selectedRunPriority) {
+      const allowedMainlinePriorities: Array<0 | 1 | 2> = selectedRunPriority === null
+        ? [0, 1, 2]
+        : selectedRunPriority === 0
+          ? [0, 1, 2]
+          : selectedRunPriority === 1
+            ? [1, 2]
+            : [2]
+      const includeMainline = allowedMainlinePriorities.includes(mainSortKey.priority as 0 | 1 | 2)
+
+      if (includeMainline) {
         queue.push({
           kind: 'mainline',
+          chapterTitle: chapterForQueue.title,
           forkMainlineIndex: 0,
           label: 'Main line',
         })
       }
-    } else {
-      queue.push({
-        kind: 'mainline',
-        forkMainlineIndex: 0,
-        label: 'Main line',
-      })
     }
 
-    setSessionVariationQueue(queue)
+    setSessionVariationQueue(queue.slice(0, MAX_QUEUE_SIZE))
   }, [quizMode, selectedChapter, selectedStudyId, selectedRunPriority, mainline, userColor])
 
   useKeyboardNavigation({
@@ -1036,10 +1156,7 @@ function App() {
             commentsVisible={commentsVisible}
             activePlayerColor={activePlayerColor}
             boardResetKey={boardResetKey}
-            queuePreview={sessionVariationQueue.slice(0, 5).map(item => ({
-              label: item.label,
-              forkMainlineIndex: item.forkMainlineIndex,
-            }))}
+            queuePreview={queuePreviewItems}
             onBackHome={() => {
               stopQuiz()
               setView('home')

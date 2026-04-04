@@ -7,6 +7,7 @@ import './TrainingView.css'
 
 interface QueuePreviewItem {
   label: string
+  chapterTitle: string
   forkMainlineIndex: number
 }
 
@@ -270,7 +271,7 @@ export default function TrainingView({
               {queuePreview.map((item, index) => (
                 <li key={`${item.forkMainlineIndex}-${item.label}-${index}`} className="tv-queue-item">
                   <span className="tv-queue-rank">{index + 1}.</span>
-                  <span className="tv-queue-label">{item.label}</span>
+                  <span className="tv-queue-label">{item.label} <span className="tv-queue-meta">({item.chapterTitle})</span></span>
                   <span className="tv-queue-meta">@ ply {item.forkMainlineIndex + 1}</span>
                 </li>
               ))}

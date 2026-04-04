@@ -152,6 +152,7 @@ export interface ChapterTrainingPick {
   study: StoredStudy
   chapterIndex: number
   priority: 0 | 1 | 2 | null
+  chapterId: string
 }
 
 export function pickNextChapterForTraining(
@@ -219,12 +220,14 @@ export function pickNextChapterForTraining(
       })
 
     const picked = pickOrder[0]
+
     if (!picked) return null
 
     return {
       study: picked.entry.study,
       chapterIndex: picked.entry.chapterIndex,
       priority: picked.priority as 0 | 1 | 2,
+      chapterId: picked.entry.cid,
     }
   }
 
@@ -241,6 +244,7 @@ export function pickNextChapterForTraining(
     study: picked.study,
     chapterIndex: picked.chapterIndex,
     priority: null,
+    chapterId: chapterId(picked.study.id, picked.study.chapters, picked.chapterIndex),
   }
 }
 
