@@ -3,7 +3,7 @@ import { extractLines, mainlineLineId, variationLineId } from './pgn'
 import type { ScoreRecord } from './scores'
 import type { StoredStudy } from './storage'
 import { chapterId } from './storage'
-import type { FlatMove } from './training'
+import { flattenLine, type FlatMove, type TrainingLine } from './training'
 
 export const STREAK_SHOWN_KEY = 'chess-opening-trainer:streak-shown-day'
 export const VARIATION_COMPLETE_DELAY_MS = 1000
@@ -19,12 +19,6 @@ export function buildParseWarningMessage(messages: string[]): string {
   const preview = unique.slice(0, 3).join(' ')
   const more = unique.length > 3 ? ` (+${unique.length - 3} more)` : ''
   return `Warning: Deep variation nesting detected. ${preview}${more}`
-}
-
-export function buildDetourRetryId(forkMainlineIndex: number, detourLine: FlatMove[]): string {
-  const firstSan = detourLine[0]?.san ?? ''
-  const leafFen = detourLine[detourLine.length - 1]?.fen ?? ''
-  return `${forkMainlineIndex}::${variationLineId('', firstSan, leafFen)}`
 }
 
 export type VariationType = 'main' | 'sideline' | 'independent'
@@ -134,14 +128,44 @@ export function collectChapterVariationDetails(chapter: Chapter): ChapterVariati
   return details
 }
 
-export function buildVariationSessionSequence(roots: MoveNode[]): MoveNode[] {
-  if (roots.length === 0) return []
+export function buildChapterTrainingLines(chapter: Chapter): { lines: TrainingLine[]; sidelineAlts: ChapterForkAlternative[] } {
+  const lines: TrainingLine[] = []
+  const sidelineAlts: ChapterForkAlternative[] = []
 
-  // Queue every eligible branch. The independent flag controls ordering only,
-  // so no candidate variation is dropped from a session.
-  const inlineRoots = roots.filter(node => !node.independent)
-  const independentRoots = roots.filter(node => node.independent)
-  return [...inlineRoots, ...independentRoots]
+  const forkAlternatives = collectChapterForkAlternatives(chapter)
+  for (const alt of forkAlternatives) {
+    if (alt.type === 'sideline') {
+      sidelineAlts.push(alt)
+      continue
+    }
+    const variationMoves = flattenLine(alt.alternative)
+    const fullLine = [...alt.pathFromStart, ...variationMoves]
+    lines.push({
+      line: fullLine,
+      lineId: alt.lineId,
+      label: alt.branchLabel,
+      scoreDisplaySan: alt.alternative.san,
+    })
+  }
+
+  const mainlineMoves: FlatMove[] = []
+  let nodes = chapter.moves
+  while (nodes.length > 0) {
+    const node = nodes[0]
+    mainlineMoves.push({ fen: node.fen, san: node.san, comment: node.comment, annotation: node.annotation })
+    nodes = node.children
+  }
+  if (mainlineMoves.length > 0) {
+    const leaf = mainlineMoves[mainlineMoves.length - 1]
+    lines.push({
+      line: mainlineMoves,
+      lineId: mainlineLineId(leaf.fen),
+      label: 'Main line',
+      scoreDisplaySan: 'Main line',
+    })
+  }
+
+  return { lines, sidelineAlts }
 }
 
 export function findScoreForLine(chapterScores: ScoreRecord[], chapterScoreId: string, lineId: string): ScoreRecord | undefined {

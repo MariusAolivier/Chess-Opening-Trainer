@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react'
 import Chessboard from '../Chessboard'
 import type { Chapter } from '../../lib/pgn'
 import type { StoredStudy } from '../../lib/storage'
-import type { InlineDetour, MainlineMove } from '../../lib/training'
+import type { FlatMove, TrainingLine } from '../../lib/training'
 import './TrainingView.css'
 
 interface QueuePreviewItem {
   label: string
   chapterTitle: string
-  forkMainlineIndex: number
 }
 
 interface TrainingViewProps {
@@ -20,10 +19,10 @@ interface TrainingViewProps {
   quizWrong: string | null
   wrongGuessTick: number
   revealedAnswer: boolean
-  inlineDetour: InlineDetour | null
   isRetryingVariation: boolean
+  isSideline: boolean
+  activeLine: TrainingLine | null
   moveIndex: number
-  mainline: MainlineMove[]
   currentFen?: string
   soundEnabled: boolean
   commentsVisible: boolean
@@ -33,7 +32,7 @@ interface TrainingViewProps {
   onBackHome: () => void
   onMove: (from: string, to: string) => boolean
   onRevealAnswer: () => void
-  onSkipCurrentVariation: () => void
+  onSkipCurrentLine: () => void
 }
 
 export default function TrainingView({
@@ -45,10 +44,10 @@ export default function TrainingView({
   quizWrong,
   wrongGuessTick,
   revealedAnswer,
-  inlineDetour,
   isRetryingVariation,
+  isSideline,
+  activeLine,
   moveIndex,
-  mainline,
   currentFen,
   soundEnabled,
   commentsVisible,
@@ -58,11 +57,13 @@ export default function TrainingView({
   onBackHome,
   onMove,
   onRevealAnswer,
-  onSkipCurrentVariation,
+  onSkipCurrentLine,
 }: TrainingViewProps) {
   const [isBoardShaking, setIsBoardShaking] = useState(false)
   const study = storedStudies.find(item => item.id === selectedStudyId)
   const userColor = activePlayerColor === 'white' ? 'w' : 'b'
+  const line = activeLine?.line ?? []
+  const startFen = selectedChapter?.startFen ?? ''
 
   useEffect(() => {
     if (wrongGuessTick === 0) return
@@ -76,67 +77,44 @@ export default function TrainingView({
   }, [wrongGuessTick])
 
   function countMovesForSide(
-    startFen: string,
-    line: Array<{ fen: string }>,
+    sFen: string,
+    moves: Array<{ fen: string }>,
     side: 'w' | 'b',
     upToIndex?: number,
   ): number {
-    if (line.length === 0) return 0
-    const lastIndex = upToIndex === undefined ? line.length - 1 : Math.min(upToIndex, line.length - 1)
+    if (moves.length === 0) return 0
+    const lastIndex = upToIndex === undefined ? moves.length - 1 : Math.min(upToIndex, moves.length - 1)
     if (lastIndex < 0) return 0
 
     let count = 0
-    let fenBefore = startFen
+    let fenBefore = sFen
     for (let index = 0; index <= lastIndex; index += 1) {
       const mover = fenBefore.split(' ')[1] as 'w' | 'b'
       if (mover === side) count += 1
-      fenBefore = line[index].fen
+      fenBefore = moves[index].fen
     }
     return count
   }
 
   function moveMoverSide(
-    startFen: string,
-    line: Array<{ fen: string }>,
+    sFen: string,
+    moves: Array<{ fen: string }>,
     moveAtIndex: number,
   ): 'w' | 'b' | null {
-    if (moveAtIndex < 0 || moveAtIndex >= line.length) return null
-    const fenBeforeMove = moveAtIndex === 0 ? startFen : line[moveAtIndex - 1]?.fen
+    if (moveAtIndex < 0 || moveAtIndex >= moves.length) return null
+    const fenBeforeMove = moveAtIndex === 0 ? sFen : moves[moveAtIndex - 1]?.fen
     if (!fenBeforeMove) return null
     return fenBeforeMove.split(' ')[1] as 'w' | 'b'
   }
 
-  function formatBranchLabel(parentFen: string, san: string): string {
-    const parts = parentFen.split(' ')
-    const sideToMove = parts[1] as 'w' | 'b' | undefined
-    const fullmove = Number.parseInt(parts[5] ?? '', 10)
-    if (!Number.isFinite(fullmove) || fullmove <= 0) return san
-    return sideToMove === 'b' ? `${fullmove}... ${san}` : `${fullmove}. ${san}`
-  }
-
-  const mainlineTotalForUser = selectedChapter
-    ? countMovesForSide(selectedChapter.startFen, mainline, userColor)
+  const totalForUser = selectedChapter
+    ? countMovesForSide(startFen, line, userColor)
     : 0
-  const mainlineDoneForUser = selectedChapter
-    ? countMovesForSide(selectedChapter.startFen, mainline, userColor, moveIndex)
+  const doneForUser = selectedChapter
+    ? countMovesForSide(startFen, line, userColor, moveIndex)
     : 0
 
-  const detourTotalForUser = inlineDetour
-    ? countMovesForSide(inlineDetour.forkFen, inlineDetour.detourLine, userColor)
-    : 0
-  const detourDoneForUser = inlineDetour
-    ? countMovesForSide(inlineDetour.forkFen, inlineDetour.detourLine, userColor, inlineDetour.detourIndex)
-    : 0
-
-  const activeAnnotation = inlineDetour && inlineDetour.detourIndex >= 0
-    ? inlineDetour.detourLine[inlineDetour.detourIndex]?.annotation
-    : moveIndex === -1
-      ? undefined
-      : mainline[moveIndex]?.annotation
-
-  const variationName = inlineDetour?.detourLine[0]?.san
-    ? `Variation ${formatBranchLabel(inlineDetour.labelForkFen, inlineDetour.labelSan)}`
-    : null
+  const activeAnnotation = moveIndex >= 0 ? line[moveIndex]?.annotation : undefined
 
   return (
     <div className="tv-root">
@@ -151,55 +129,19 @@ export default function TrainingView({
         </div>
       )}
 
-      {selectedChapter && (
+      {selectedChapter && activeLine && (
         <div className="tv-move-info">
-          {inlineDetour ? (
-            <>
-              {!inlineDetour.isIndependent && <span className="tv-inline-label">↪ Sideline</span>}
-              {inlineDetour.detourIndex >= 0 && (
-                <span className="tv-inline-san">
-                  {inlineDetour.detourLine[inlineDetour.detourIndex]?.san}
-                  {inlineDetour.detourLine[inlineDetour.detourIndex]?.annotation ? ` ${inlineDetour.detourLine[inlineDetour.detourIndex]?.annotation}` : ''}
-                </span>
-              )}
-              <span className="tv-progress-count">
-                ({detourDoneForUser}/{detourTotalForUser})
-              </span>
-              {variationName && (
-                <div className="tv-variation-name">{variationName}</div>
-              )}
-            </>
-          ) : (
-            <>
-              {moveIndex === -1
-                ? 'Start position'
-                : `${Math.ceil((moveIndex + 1) / 2)}${mainline[moveIndex] ? (moveIndex % 2 === 0 ? '.' : '...') : ''} ${mainline[moveIndex]?.san ?? ''}${mainline[moveIndex]?.annotation ? ` ${mainline[moveIndex]?.annotation}` : ''}`}
-              {moveIndex >= 0 && (() => {
-                const alts = mainline[moveIndex]?.alternatives ?? []
-                const inlineCount = alts.filter(alt => !alt.independent).length
-                const independentCount = alts.filter(alt => alt.independent).length
-                if (!inlineCount && !independentCount) return null
-                return (
-                  <span className="tv-branch-dots">
-                    {inlineCount > 0 && (
-                      <span title={`${inlineCount} inline sideline(s)`} className="tv-inline-dot">{'●'.repeat(inlineCount)}</span>
-                    )}
-                    {independentCount > 0 && (
-                      <span
-                        title={`${independentCount} independent variation(s)`}
-                        className={`tv-indep-dot ${inlineCount > 0 ? 'tv-indep-dot-with-inline' : ''}`}
-                      >
-                        {'●'.repeat(independentCount)}
-                      </span>
-                    )}
-                  </span>
-                )
-              })()}
-              <span className="tv-progress-count">
-                ({mainlineDoneForUser} / {mainlineTotalForUser})
-              </span>
-            </>
+          {isSideline && <span className="tv-inline-label">↪ Sideline</span>}
+          <span className="tv-variation-name">{activeLine.label}</span>
+          {moveIndex >= 0 && (
+            <span className="tv-inline-san">
+              {line[moveIndex]?.san}
+              {line[moveIndex]?.annotation ? ` ${line[moveIndex]?.annotation}` : ''}
+            </span>
           )}
+          <span className="tv-progress-count">
+            ({doneForUser}/{totalForUser})
+          </span>
         </div>
       )}
 
@@ -218,7 +160,7 @@ export default function TrainingView({
       {isRetryingVariation && (
         <div className="tv-retry-banner">
           <span className="tv-retry-label">↻ Retrying variation</span>
-          <button type="button" onClick={onSkipCurrentVariation} className="tv-retry-skip-btn">
+          <button type="button" onClick={onSkipCurrentLine} className="tv-retry-skip-btn">
             Skip
           </button>
         </div>
@@ -240,19 +182,13 @@ export default function TrainingView({
       </div>
 
       {commentsVisible && selectedChapter && (() => {
-        const comment = inlineDetour && inlineDetour.detourIndex >= 0
-          ? (() => {
-            const mover = moveMoverSide(inlineDetour.forkFen, inlineDetour.detourLine, inlineDetour.detourIndex)
+        const comment = moveIndex === -1
+          ? selectedChapter.startComment
+          : (() => {
+            const mover = moveMoverSide(startFen, line, moveIndex)
             if (mover === userColor) return null
-            return inlineDetour.detourLine[inlineDetour.detourIndex]?.comment
+            return line[moveIndex]?.comment
           })()
-          : moveIndex === -1
-            ? selectedChapter.startComment
-            : (() => {
-              const mover = moveMoverSide(selectedChapter.startFen, mainline, moveIndex)
-              if (mover === userColor) return null
-              return mainline[moveIndex]?.comment
-            })()
         if (!comment) return null
         return (
           <div className="tv-comment">
@@ -269,10 +205,9 @@ export default function TrainingView({
           ) : (
             <ol className="tv-queue-list">
               {queuePreview.map((item, index) => (
-                <li key={`${item.forkMainlineIndex}-${item.label}-${index}`} className="tv-queue-item">
+                <li key={`${item.label}-${index}`} className="tv-queue-item">
                   <span className="tv-queue-rank">{index + 1}.</span>
                   <span className="tv-queue-label">{item.label} <span className="tv-queue-meta">({item.chapterTitle})</span></span>
-                  <span className="tv-queue-meta">@ ply {item.forkMainlineIndex + 1}</span>
                 </li>
               ))}
             </ol>

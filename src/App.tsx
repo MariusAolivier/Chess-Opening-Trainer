@@ -6,7 +6,7 @@ import StreakAnimation from './components/StreakAnimation'
 import HomeView from './components/views/HomeView'
 import RepertoireView from './components/views/RepertoireView'
 import TrainingView from './components/views/TrainingView'
-import { parseStudyWithWarnings, parseStudiesWithWarnings, type Chapter, type MoveNode, extractForkMoves, extractLines, mainlineLineId, variationLineId } from './lib/pgn'
+import { parseStudyWithWarnings, parseStudiesWithWarnings, type Chapter, extractForkMoves, extractLines } from './lib/pgn'
 import {
   loadStudies,
   saveStudy,
@@ -51,11 +51,10 @@ import {
   HOME_FENS,
   STARTING_FEN,
   findQuizStartMoveIndex,
-  flattenDetour,
+  flattenLine,
   type FlatMove,
-  nextPlayableDetourIndex,
-  type InlineDetour,
-  type MainlineMove,
+  type TrainingLine,
+  type SidelineAttachment,
 } from './lib/training'
 import {
   exportLichessStudiesPgn,
@@ -64,50 +63,26 @@ import {
 import {
   STREAK_SHOWN_KEY,
   VARIATION_COMPLETE_DELAY_MS,
+  buildChapterTrainingLines,
   buildParseWarningMessage,
-  buildVariationSessionSequence,
-  collectChapterForkAlternatives,
   collectChapterVariationDetails,
   chapterConflictMap,
   colorFromLichessStudyName,
   findScoreForLine,
   pickNextChapterForTraining,
   todayDayKey,
+  type ChapterForkAlternative,
 } from './lib/appHelpers'
 import { useInitialSync } from './hooks/useInitialSync'
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation'
 import { useLichessSync } from './hooks/useLichessSync'
 
 function App() {
-  type SessionVariationQueueVariationItem = {
-    kind: 'variation'
-    chapterTitle: string
-    forkMainlineIndex: number
-    startFen: string
-    forkFen: string
-    scoreFirstSan: string
-    leadInLine: FlatMove[]
-    pendingInlines: MoveNode[]
-    detourLine: FlatMove[]
-    isIndependent: boolean
-    label: string
-  }
-
-  type SessionVariationQueueMainlineItem = {
-    kind: 'mainline'
-    chapterTitle: string
-    forkMainlineIndex: number
-    label: string
-  }
-
-  type SessionVariationQueueItem = SessionVariationQueueVariationItem | SessionVariationQueueMainlineItem
   const MAX_QUEUE_SIZE = 10
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const detourWrongCountRef = useRef(0)
-  const mainlineWrongCountRef = useRef<Map<number, number>>(new Map())
-  const activeVariationScoreRef = useRef<{ forkFen: string; firstSan: string } | null>(null)
-  const activeVariationLeadInRef = useRef<FlatMove[]>([])
+  const wrongCountRef = useRef(0)
+  const trainingQueueRef = useRef<TrainingLine[]>([])
 
   const [view, setView] = useState<'home' | 'repertoire' | 'training'>('home')
   const [storedStudies, setStoredStudies] = useState<StoredStudy[]>(() => loadStudies())
@@ -115,6 +90,7 @@ function App() {
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null)
   const [selectedStudyId, setSelectedStudyId] = useState<string | null>(null)
 
+  const [activeLine, setActiveLine] = useState<TrainingLine | null>(null)
   const [moveIndex, setMoveIndex] = useState(-1)
   const [quizMode, setQuizMode] = useState(false)
   const [quizDone, setQuizDone] = useState(false)
@@ -122,15 +98,16 @@ function App() {
   const [wrongGuessTick, setWrongGuessTick] = useState(0)
   const [revealedAnswer, setRevealedAnswer] = useState(false)
   const [trainingSessionKey, setTrainingSessionKey] = useState(0)
-  const [inlineDetour, setInlineDetour] = useState<InlineDetour | null>(null)
   const [isRetryingVariation, setIsRetryingVariation] = useState(false)
   const [boardResetKey, setBoardResetKey] = useState(0)
+  const [parentLineState, setParentLineState] = useState<{ line: TrainingLine; moveIndex: number; wrongCount: number } | null>(null)
+  const [isSideline, setIsSideline] = useState(false)
 
   const [error, setError] = useState<string | null>(null)
   const [conflictWarnings, setConflictWarnings] = useState<ConflictInfo[]>([])
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
-  const [sessionVariationQueue, setSessionVariationQueue] = useState<SessionVariationQueueItem[]>([])
+  const [trainingQueue, setTrainingQueue] = useState<TrainingLine[]>([])
 
   const [statsKey, setStatsKey] = useState(0)
   const [selectedRunPriority, setSelectedRunPriority] = useState<0 | 1 | 2 | null>(null)
@@ -148,17 +125,18 @@ function App() {
   const [lichessUsername, setLichessUsername] = useState<string | null>(null)
 
   function resetTrainingProgress() {
+    setActiveLine(null)
     setMoveIndex(-1)
     setQuizDone(false)
     setQuizWrong(null)
     setWrongGuessTick(0)
     setRevealedAnswer(false)
-    setInlineDetour(null)
     setIsRetryingVariation(false)
-    activeVariationScoreRef.current = null
-    activeVariationLeadInRef.current = []
-    detourWrongCountRef.current = 0
-    mainlineWrongCountRef.current = new Map()
+    setParentLineState(null)
+    setIsSideline(false)
+    wrongCountRef.current = 0
+    trainingQueueRef.current = []
+    setTrainingQueue([])
   }
 
   async function persistReviewData() {
@@ -188,59 +166,25 @@ function App() {
     return remapChapterIds(remap)
   }, [])
 
-  function recordMainlineReview() {
-    if (!selectedStudyId || !selectedChapter) return
+  function recordLineReview() {
+    if (!selectedStudyId || !selectedChapter || !activeLine) return
     const chapterIndex = chapters.indexOf(selectedChapter)
     if (chapterIndex < 0) return
 
-    const leaf = mainline[mainline.length - 1]
-    if (!leaf) return
-
-    const totalWrongs = [...mainlineWrongCountRef.current.values()].reduce((acc, value) => acc + value, 0)
-    const quality: 0 | 1 | 2 | 3 | 4 | 5 = totalWrongs === 0 ? 5 : totalWrongs <= 2 ? 3 : 1
-    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), mainlineLineId(leaf.fen), 'Main line', quality, spacedRepetitionIntensity)
+    const wrongs = wrongCountRef.current
+    const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs <= 2 ? 3 : 1
+    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), activeLine.lineId, activeLine.scoreDisplaySan, quality, spacedRepetitionIntensity)
     void persistReviewData()
   }
 
-  function alternativeSortKey(studyId: string, chapter: Chapter, forkFen: string, alternative: MoveNode): { priority: number; dueAt: number } {
-    const chapterIndex = chapters.indexOf(chapter)
-    if (chapterIndex < 0) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-
-    const cid = chapterId(studyId, chapters, chapterIndex)
-    const detourLine = flattenDetour(alternative)
-    const lineLeafFen = detourLine.at(-1)?.fen
-    if (!lineLeafFen) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-
-    const lineId = variationLineId(forkFen, alternative.san, lineLeafFen)
+  function lineSortKey(lineId: string, cid: string): { priority: number; dueAt: number } {
     const score = findScoreForLine(loadScores(), cid, lineId)
     if (!score || !score.lastReviewedAt || score.interval <= 0) {
       return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
     }
-
     const dueAt = Date.parse(score.dueDate)
     if (Number.isNaN(dueAt)) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
     if (dueAt <= Date.now()) return { priority: 1, dueAt }
-
-    return { priority: 2, dueAt }
-  }
-
-  function mainlineSortKey(studyId: string, chapter: Chapter): { priority: number; dueAt: number } {
-    const chapterIndex = chapters.indexOf(chapter)
-    if (chapterIndex < 0) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-
-    const leaf = mainline[mainline.length - 1]
-    if (!leaf) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-
-    const cid = chapterId(studyId, chapters, chapterIndex)
-    const score = findScoreForLine(loadScores(), cid, mainlineLineId(leaf.fen))
-    if (!score || !score.lastReviewedAt || score.interval <= 0) {
-      return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-    }
-
-    const dueAt = Date.parse(score.dueDate)
-    if (Number.isNaN(dueAt)) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-    if (dueAt <= Date.now()) return { priority: 1, dueAt }
-
     return { priority: 2, dueAt }
   }
 
@@ -287,7 +231,8 @@ function App() {
     setSelectedChapter(chaptersToLoad[0] ?? null)
     setActivePlayerColor(playerColor)
     setSelectedStudyId(studyId ?? null)
-    setSessionVariationQueue([])
+    trainingQueueRef.current = []
+    setTrainingQueue([])
     setError(null)
   }
 
@@ -305,13 +250,13 @@ function App() {
 
   const userColor = useMemo(() => (activePlayerColor === 'white' ? 'w' : 'b'), [activePlayerColor])
 
-  const mainline = useMemo<MainlineMove[]>(() => {
+  const mainline = useMemo<FlatMove[]>(() => {
     if (!selectedChapter) return []
-    const line: MainlineMove[] = []
-    let nodes: MoveNode[] = selectedChapter.moves
+    const line: FlatMove[] = []
+    let nodes = selectedChapter.moves
     while (nodes.length > 0) {
       const node = nodes[0]
-      line.push({ fen: node.fen, san: node.san, comment: node.comment, annotation: node.annotation, alternatives: nodes.slice(1) })
+      line.push({ fen: node.fen, san: node.san, comment: node.comment, annotation: node.annotation })
       nodes = node.children
     }
     return line
@@ -332,10 +277,9 @@ function App() {
       return { priority: 2, dueAt: Number.POSITIVE_INFINITY }
     }
 
-    const baseItems = sessionVariationQueue.slice(0, MAX_QUEUE_SIZE).map(item => ({
+    const baseItems = trainingQueue.slice(0, MAX_QUEUE_SIZE).map(item => ({
       label: item.label,
-      chapterTitle: item.chapterTitle,
-      forkMainlineIndex: item.forkMainlineIndex,
+      chapterTitle: selectedChapter?.title ?? '',
     }))
 
     if (selectedChapterIds.size <= 1 || baseItems.length >= MAX_QUEUE_SIZE) {
@@ -368,18 +312,13 @@ function App() {
     if (ordered.length <= 1) return baseItems
 
     const projected = ordered.flatMap(entry => {
-      const forkAlternatives = collectChapterForkAlternatives(entry.chapter)
-      const forkByLineId = new Map(forkAlternatives.map(item => [item.lineId, item] as const))
       const variationDetails = collectChapterVariationDetails(entry.chapter)
 
       return variationDetails.map(detail => {
-        const fork = forkByLineId.get(detail.lineId)
-        const forkMainlineIndex = detail.type === 'main' ? 0 : (fork?.forkMainlineIndex ?? 0)
         const priorityInfo = linePriorityInfo(entry.cid, detail.lineId)
         return {
           label: detail.branchLabel,
           chapterTitle: entry.chapter.title,
-          forkMainlineIndex,
           priority: priorityInfo.priority,
           dueAt: priorityInfo.dueAt,
           studyName: entry.study.name.toLocaleLowerCase(),
@@ -399,15 +338,14 @@ function App() {
       if (left.studyName !== right.studyName) return left.studyName.localeCompare(right.studyName)
       if (left.chapterName !== right.chapterName) return left.chapterName.localeCompare(right.chapterName)
       if (left.label !== right.label) return left.label.localeCompare(right.label)
-      return left.forkMainlineIndex - right.forkMainlineIndex
+      return 0
     })
 
     return orderedProjected.slice(0, MAX_QUEUE_SIZE).map(item => ({
       label: item.label,
       chapterTitle: item.chapterTitle,
-      forkMainlineIndex: item.forkMainlineIndex,
     }))
-  }, [sessionVariationQueue, selectedChapterIds, storedStudies, statsKey])
+  }, [trainingQueue, selectedChapterIds, storedStudies, statsKey, selectedChapter])
 
   const totalDue = useMemo(() => {
     const scores = loadScores()
@@ -422,131 +360,93 @@ function App() {
     resetTrainingProgress()
   }, [selectedChapter])
 
+  // Build queue and start first line when quiz begins
   useEffect(() => {
     if (!quizMode || !selectedChapter) return
-    setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
-    setBoardResetKey(key => key + 1)
-  }, [quizMode, selectedChapter, mainline, userColor, trainingSessionKey])
 
-  useEffect(() => {
-    if (!quizMode || !selectedChapter) return
-    const chapterForQueue = selectedChapter
-    const quizStartIndex = findQuizStartMoveIndex(chapterForQueue, mainline, userColor)
-    const sessionStartPly = quizStartIndex + 1
-    const sessionStartFen = quizStartIndex === -1
-      ? chapterForQueue.startFen
-      : (mainline[quizStartIndex]?.fen ?? chapterForQueue.startFen)
+    const { lines: allLines, sidelineAlts } = buildChapterTrainingLines(selectedChapter)
 
-    const queue: SessionVariationQueueItem[] = []
+    const chapterIndex = chapters.indexOf(selectedChapter)
+    const cid = selectedStudyId && chapterIndex >= 0
+      ? chapterId(selectedStudyId, chapters, chapterIndex)
+      : null
 
-    const forkAlternatives = collectChapterForkAlternatives(chapterForQueue)
-    const alternativesByLineId = new Map<string, typeof forkAlternatives>()
-    forkAlternatives.forEach(item => {
-      const list = alternativesByLineId.get(item.lineId) ?? []
-      list.push(item)
-      alternativesByLineId.set(item.lineId, list)
-    })
+    const filtered = (() => {
+      if (!cid) return allLines
 
-    const repertoireOrdered = collectChapterVariationDetails(chapterForQueue)
-      .filter(item => item.type !== 'main')
-
-    const orderedAlternatives = repertoireOrdered.flatMap(detail => {
-      const list = alternativesByLineId.get(detail.lineId)
-      if (!list || list.length === 0) return []
-      const next = list[0]
-      alternativesByLineId.set(detail.lineId, list.slice(1))
-      return [next]
-    })
-
-    const filteredAlternatives = (() => {
-      if (!selectedStudyId) return orderedAlternatives
-
-      const withPriority = orderedAlternatives.map(item => ({
-        item,
-        sortKey: alternativeSortKey(selectedStudyId, chapterForQueue, item.forkFen, item.alternative),
+      const withPriority = allLines.map(line => ({
+        line,
+        sortKey: lineSortKey(line.lineId, cid),
       }))
 
-      const order: number[] = selectedRunPriority === null
+      const allowedPriorities: number[] = selectedRunPriority === null || selectedRunPriority === 0
         ? [0, 1, 2]
-        : selectedRunPriority === 0
-          ? [0, 1, 2]
-          : selectedRunPriority === 1
-            ? [1, 2]
-            : [2]
+        : selectedRunPriority === 1
+          ? [1, 2]
+          : [2]
 
-      return order.flatMap(priority =>
+      return allowedPriorities.flatMap(p =>
         withPriority
-          .filter(entry => entry.sortKey.priority === priority)
-          .map(entry => entry.item)
+          .filter(entry => entry.sortKey.priority === p)
+          .map(entry => entry.line)
       )
     })()
 
-    const groupedByFork = new Map<string, typeof filteredAlternatives>()
-    filteredAlternatives.forEach(item => {
-      const pathKey = item.pathFromStart.map(move => move.fen).join('|')
-      const key = `${item.forkFen}::${item.forkMainlineIndex}::${pathKey}`
-      const list = groupedByFork.get(key) ?? []
-      list.push(item)
-      groupedByFork.set(key, list)
-    })
+    // Attach due sidelines to parent lines
+    if (cid && sidelineAlts.length > 0) {
+      const scores = loadScores()
+      const now = Date.now()
 
-    groupedByFork.forEach(group => {
-      if (group.length === 0) return
-
-      const orderedRoots = buildVariationSessionSequence(group.map(entry => entry.alternative))
-      const orderedEntries = orderedRoots
-        .map(root => group.find(entry => entry.alternative === root))
-        .filter((entry): entry is (typeof group)[number] => Boolean(entry))
-
-      const firstEntry = orderedEntries[0]
-      if (!firstEntry) return
-
-      const leadInLine = firstEntry.pathFromStart.slice(sessionStartPly)
-      queue.push({
-        kind: 'variation',
-        chapterTitle: chapterForQueue.title,
-        forkMainlineIndex: firstEntry.forkMainlineIndex,
-        startFen: sessionStartFen,
-        forkFen: firstEntry.forkFen,
-        scoreFirstSan: firstEntry.alternative.san,
-        leadInLine,
-        pendingInlines: orderedEntries.slice(1).map(entry => entry.alternative),
-        detourLine: flattenDetour(firstEntry.alternative),
-        isIndependent: firstEntry.type === 'independent',
-        label: firstEntry.alternative.san,
+      const dueSidelines = sidelineAlts.filter(alt => {
+        const score = findScoreForLine(scores, cid, alt.lineId)
+        if (!score || !score.lastReviewedAt || score.interval <= 0) return true
+        const dueAt = Date.parse(score.dueDate)
+        return !Number.isNaN(dueAt) && dueAt <= now
       })
-    })
 
-    if (!selectedStudyId) {
-      queue.push({
-        kind: 'mainline',
-        chapterTitle: chapterForQueue.title,
-        forkMainlineIndex: 0,
-        label: 'Main line',
-      })
-    } else {
-      const mainSortKey = mainlineSortKey(selectedStudyId, chapterForQueue)
-      const allowedMainlinePriorities: Array<0 | 1 | 2> = selectedRunPriority === null
-        ? [0, 1, 2]
-        : selectedRunPriority === 0
-          ? [0, 1, 2]
-          : selectedRunPriority === 1
-            ? [1, 2]
-            : [2]
-      const includeMainline = allowedMainlinePriorities.includes(mainSortKey.priority as 0 | 1 | 2)
+      for (const alt of dueSidelines) {
+        const forkMoveIndex = alt.pathFromStart.length
+        const parent = filtered.find(line => line.line.length > forkMoveIndex)
+        if (!parent) continue
 
-      if (includeMainline) {
-        queue.push({
-          kind: 'mainline',
-          chapterTitle: chapterForQueue.title,
-          forkMainlineIndex: 0,
-          label: 'Main line',
-        })
+        const sidelineMoves = flattenLine(alt.alternative)
+        const attachment: SidelineAttachment = {
+          forkMoveIndex,
+          sidelineLine: {
+            line: sidelineMoves,
+            lineId: alt.lineId,
+            label: alt.branchLabel,
+            scoreDisplaySan: alt.alternative.san,
+          },
+        }
+
+        if (!parent.sidelines) parent.sidelines = []
+        parent.sidelines.push(attachment)
+      }
+
+      // Sort sidelines on each parent by forkMoveIndex ascending
+      for (const line of filtered) {
+        if (line.sidelines) {
+          line.sidelines.sort((a, b) => a.forkMoveIndex - b.forkMoveIndex)
+        }
       }
     }
 
-    setSessionVariationQueue(queue.slice(0, MAX_QUEUE_SIZE))
-  }, [quizMode, selectedChapter, selectedStudyId, selectedRunPriority, mainline, userColor])
+    if (filtered.length === 0) {
+      setQuizDone(true)
+      return
+    }
+
+    const [first, ...rest] = filtered
+    setActiveLine(first)
+    trainingQueueRef.current = rest.slice(0, MAX_QUEUE_SIZE)
+    setTrainingQueue(rest.slice(0, MAX_QUEUE_SIZE))
+    wrongCountRef.current = 0
+    setParentLineState(null)
+    setIsSideline(false)
+    setMoveIndex(findQuizStartMoveIndex(selectedChapter, first.line, userColor))
+    setBoardResetKey(key => key + 1)
+  }, [quizMode, selectedChapter, selectedStudyId, selectedRunPriority, userColor, trainingSessionKey])
 
   useKeyboardNavigation({
     quizMode,
@@ -554,148 +454,99 @@ function App() {
     setMoveIndex,
   })
 
+  // The effective start FEN for the current active line
+  const activeStartFen = isSideline && parentLineState
+    ? parentLineState.sidelineStartFen
+    : selectedChapter?.startFen ?? STARTING_FEN
+
+  // Unified auto-advance: handles all lines (mainline and variations) the same way
   useEffect(() => {
-    if (!quizMode || !selectedChapter || quizDone) return
+    if (!quizMode || !selectedChapter || quizDone || !activeLine) return
 
-    if (inlineDetour) {
-      const { detourLine, detourIndex, forkFen, pendingInlines, forkMainlineIndex, isIndependent } = inlineDetour
-      const detourFen = detourIndex === -1 ? forkFen : detourLine[detourIndex]?.fen
-      if (!detourFen) return
+    const { line } = activeLine
+    const fen = moveIndex === -1 ? activeStartFen : line[moveIndex]?.fen
+    if (!fen) return
 
-      const nextDetourIndex = nextPlayableDetourIndex(detourLine, detourIndex, detourFen)
-      if (nextDetourIndex >= detourLine.length) {
-        const wrongs = detourWrongCountRef.current
-        const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 3 : 1
+    const nextIndex = moveIndex + 1
 
-        if (repeatFailedVariationsEnabled && wrongs > 0 && !isRetryingVariation) {
-          const timeout = setTimeout(() => {
-            setQuizWrong(null)
-            setRevealedAnswer(false)
-            setBoardResetKey(key => key + 1)
-            setIsRetryingVariation(true)
-            setInlineDetour({
-              forkFen,
-              labelForkFen: inlineDetour.labelForkFen,
-              labelSan: inlineDetour.labelSan,
-              forkMainlineIndex,
-              pendingInlines,
-              detourLine,
-              detourIndex: -1,
-              isIndependent,
-            })
-          }, VARIATION_COMPLETE_DELAY_MS)
+    // Check for sideline interruption at the fork point
+    if (!isSideline && activeLine.sidelines?.length) {
+      const nextSideline = activeLine.sidelines.find(s => s.forkMoveIndex === nextIndex)
+      if (nextSideline) {
+        const timeout = setTimeout(() => {
+          const remainingSidelines = activeLine.sidelines!.filter(s => s !== nextSideline)
+          const updatedParent: TrainingLine = { ...activeLine, sidelines: remainingSidelines.length > 0 ? remainingSidelines : undefined }
+          setParentLineState({
+            line: updatedParent,
+            moveIndex,
+            wrongCount: wrongCountRef.current,
+            sidelineStartFen: fen,
+          })
+          setActiveLine(nextSideline.sidelineLine)
+          setIsSideline(true)
+          wrongCountRef.current = 0
+          setQuizWrong(null)
+          setRevealedAnswer(false)
+          setMoveIndex(-1)
+          setBoardResetKey(key => key + 1)
+        }, 500)
+        return () => clearTimeout(timeout)
+      }
+    }
 
-          return () => clearTimeout(timeout)
-        }
+    // Current line complete?
+    if (nextIndex >= line.length) {
+      recordLineReview()
 
-        if (selectedStudyId && selectedChapter) {
-          const chapterIndex = chapters.indexOf(selectedChapter)
-          const detourLeaf = detourLine[detourLine.length - 1]
-          const scoreMeta = activeVariationScoreRef.current
-          const scoreForkFen = scoreMeta?.forkFen ?? forkFen
-          const scoreFirstSan = scoreMeta?.firstSan ?? detourLine[0].san
-          recordReview(
-            chapterId(selectedStudyId, chapters, chapterIndex),
-            variationLineId(scoreForkFen, scoreFirstSan, detourLeaf.fen),
-            scoreFirstSan,
-            quality,
-            spacedRepetitionIntensity
-          )
-          void persistReviewData()
-        }
-
+      if (repeatFailedVariationsEnabled && wrongCountRef.current > 0 && !isRetryingVariation) {
         const timeout = setTimeout(() => {
           setQuizWrong(null)
           setRevealedAnswer(false)
+          setIsRetryingVariation(true)
+          wrongCountRef.current = 0
+          setMoveIndex(-1)
           setBoardResetKey(key => key + 1)
-
-          if (pendingInlines.length > 0) {
-            const nextRoot = pendingInlines[0]
-            if (!nextRoot) return
-            detourWrongCountRef.current = 0
-            setIsRetryingVariation(false)
-            setInlineDetour({
-              forkFen,
-              labelForkFen: inlineDetour.labelForkFen,
-              labelSan: nextRoot.san,
-              forkMainlineIndex,
-              pendingInlines: pendingInlines.slice(1),
-              detourLine: [...activeVariationLeadInRef.current, ...flattenDetour(nextRoot)],
-              detourIndex: -1,
-              isIndependent: Boolean(nextRoot.independent),
-            })
-            const currentScoreMeta = activeVariationScoreRef.current
-            if (currentScoreMeta) {
-              activeVariationScoreRef.current = {
-                forkFen: currentScoreMeta.forkFen,
-                firstSan: nextRoot.san,
-              }
-            }
-          } else {
-            detourWrongCountRef.current = 0
-            setIsRetryingVariation(false)
-            setInlineDetour(null)
-            activeVariationScoreRef.current = null
-            activeVariationLeadInRef.current = []
-          }
         }, VARIATION_COMPLETE_DELAY_MS)
-
         return () => clearTimeout(timeout)
       }
 
-      const colorToMove = detourFen.split(' ')[1] as 'w' | 'b'
-      if (colorToMove !== userColor) {
+      // If this was a sideline, return to parent
+      if (parentLineState) {
         const timeout = setTimeout(() => {
-          setInlineDetour(detour => (detour ? { ...detour, detourIndex: nextDetourIndex } : null))
           setQuizWrong(null)
-        }, 700)
+          setRevealedAnswer(false)
+          setIsRetryingVariation(false)
+          setActiveLine(parentLineState.line)
+          setMoveIndex(parentLineState.moveIndex)
+          wrongCountRef.current = parentLineState.wrongCount
+          setParentLineState(null)
+          setIsSideline(false)
+          setBoardResetKey(key => key + 1)
+        }, VARIATION_COMPLETE_DELAY_MS)
         return () => clearTimeout(timeout)
       }
 
-      return
+      const timeout = setTimeout(() => {
+        setQuizWrong(null)
+        setRevealedAnswer(false)
+        setIsRetryingVariation(false)
+        wrongCountRef.current = 0
+
+        const next = trainingQueueRef.current[0]
+        if (!next) {
+          setQuizDone(true)
+          return
+        }
+        trainingQueueRef.current = trainingQueueRef.current.slice(1)
+        setTrainingQueue(trainingQueueRef.current)
+        setActiveLine(next)
+        setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor))
+        setBoardResetKey(key => key + 1)
+      }, VARIATION_COMPLETE_DELAY_MS)
+      return () => clearTimeout(timeout)
     }
 
-    const fen = moveIndex === -1 ? selectedChapter.startFen : mainline[moveIndex]?.fen
-    if (!fen) return
-
-    if (sessionVariationQueue.length > 0) {
-      const queued = sessionVariationQueue[0]
-      if (!queued) return
-      if (queued.kind === 'mainline') {
-        setSessionVariationQueue(previous => previous.slice(1))
-        return
-      }
-      setSessionVariationQueue(previous => previous.slice(1))
-      activeVariationScoreRef.current = {
-        forkFen: queued.forkFen,
-        firstSan: queued.scoreFirstSan,
-      }
-      activeVariationLeadInRef.current = queued.leadInLine
-      setInlineDetour({
-        forkFen: queued.startFen,
-        labelForkFen: queued.forkFen,
-        labelSan: queued.scoreFirstSan,
-        forkMainlineIndex: queued.forkMainlineIndex,
-        pendingInlines: queued.pendingInlines,
-        detourLine: [...queued.leadInLine, ...queued.detourLine],
-        detourIndex: -1,
-        isIndependent: queued.isIndependent,
-      })
-      detourWrongCountRef.current = 0
-      setIsRetryingVariation(false)
-      setMoveIndex(findQuizStartMoveIndex(selectedChapter, mainline, userColor))
-      setBoardResetKey(key => key + 1)
-      return
-    }
-
-    const nextIndex = moveIndex + 1
-    if (nextIndex >= mainline.length) {
-      recordMainlineReview()
-      setIsRetryingVariation(false)
-      setQuizDone(true)
-      return
-    }
-
+    // Auto-advance opponent's move
     const colorToMove = fen.split(' ')[1] as 'w' | 'b'
     if (colorToMove !== userColor) {
       const timeout = setTimeout(() => {
@@ -704,7 +555,7 @@ function App() {
       }, 700)
       return () => clearTimeout(timeout)
     }
-  }, [quizMode, moveIndex, selectedChapter, userColor, mainline, quizDone, inlineDetour, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity, isRetryingVariation, selectedRunPriority, sessionVariationQueue])
+  }, [quizMode, moveIndex, selectedChapter, userColor, quizDone, activeLine, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity, isRetryingVariation, isSideline, parentLineState, activeStartFen])
 
   useEffect(() => {
     if (!quizDone) return
@@ -713,8 +564,8 @@ function App() {
     return () => clearTimeout(timeout)
   }, [quizDone])
 
-  const currentFen = inlineDetour
-    ? (inlineDetour.detourIndex === -1 ? inlineDetour.forkFen : inlineDetour.detourLine[inlineDetour.detourIndex]?.fen)
+  const currentFen = activeLine && quizMode
+    ? (moveIndex === -1 ? activeStartFen : activeLine.line[moveIndex]?.fen)
     : (moveIndex === -1 ? selectedChapter?.startFen : mainline[moveIndex]?.fen)
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -929,53 +780,29 @@ function App() {
   }
 
   function handleQuizMove(from: string, to: string): boolean {
-    if (!quizMode || !selectedChapter || quizDone) return false
+    if (!quizMode || !selectedChapter || quizDone || !activeLine) return false
 
-    if (inlineDetour) {
-      const { detourLine, detourIndex, forkFen } = inlineDetour
-      const fen = detourIndex === -1 ? forkFen : detourLine[detourIndex]?.fen
-      if (!fen) return false
-
-      const nextDetourIndex = nextPlayableDetourIndex(detourLine, detourIndex, fen)
-      if (nextDetourIndex >= detourLine.length) return false
-
-      const expected = detourLine[nextDetourIndex]
-      const chess = new Chess(fen)
-      const result = chess.move({ from, to, promotion: 'q' })
-      if (!result) return false
-
-      if (chess.fen() === expected.fen) {
-        setQuizWrong(null)
-        setInlineDetour(detour => (detour ? { ...detour, detourIndex: nextDetourIndex } : null))
-        return true
-      }
-
-      detourWrongCountRef.current += 1
-      setQuizWrong(expected.san)
-      setWrongGuessTick(tick => tick + 1)
-      setRevealedAnswer(false)
-      return false
-    }
-
-    const fen = moveIndex === -1 ? selectedChapter.startFen : mainline[moveIndex]?.fen
+    const { line } = activeLine
+    const fen = moveIndex === -1 ? activeStartFen : line[moveIndex]?.fen
     if (!fen) return false
 
     const nextIndex = moveIndex + 1
-    if (nextIndex >= mainline.length) return false
+    if (nextIndex >= line.length) return false
 
+    const expected = line[nextIndex]
     const chess = new Chess(fen)
     const result = chess.move({ from, to, promotion: 'q' })
     if (!result) return false
 
-    if (chess.fen() === mainline[nextIndex].fen) {
+    if (chess.fen() === expected.fen) {
       setQuizWrong(null)
       setRevealedAnswer(false)
       setMoveIndex(nextIndex)
       return true
     }
 
-    mainlineWrongCountRef.current.set(nextIndex, (mainlineWrongCountRef.current.get(nextIndex) ?? 0) + 1)
-    setQuizWrong(mainline[nextIndex].san)
+    wrongCountRef.current += 1
+    setQuizWrong(expected.san)
     setWrongGuessTick(tick => tick + 1)
     setRevealedAnswer(false)
     return false
@@ -983,67 +810,50 @@ function App() {
 
   function revealAnswer() {
     setRevealedAnswer(true)
-    if (inlineDetour) {
-      detourWrongCountRef.current = 99
-    } else {
-      const nextIndex = moveIndex + 1
-      mainlineWrongCountRef.current.set(nextIndex, 99)
-    }
+    wrongCountRef.current = 99
   }
 
-  function skipCurrentVariation() {
-    if (!inlineDetour || !selectedChapter || !selectedStudyId) return
+  function skipCurrentLine() {
+    if (!activeLine || !selectedChapter || !selectedStudyId) return
 
     const chapterIndex = chapters.indexOf(selectedChapter)
     if (chapterIndex < 0) return
 
-    setQuizWrong(null)
-    setRevealedAnswer(false)
-
-    const detourLeaf = inlineDetour.detourLine[inlineDetour.detourLine.length - 1]
-    if (!detourLeaf) return
-    const scoreMeta = activeVariationScoreRef.current
-    const scoreForkFen = scoreMeta?.forkFen ?? inlineDetour.forkFen
-    const scoreFirstSan = scoreMeta?.firstSan ?? inlineDetour.detourLine[0].san
-
+    // Record as failed
     recordReview(
       chapterId(selectedStudyId, chapters, chapterIndex),
-      variationLineId(scoreForkFen, scoreFirstSan, detourLeaf.fen),
-      scoreFirstSan,
+      activeLine.lineId,
+      activeLine.scoreDisplaySan,
       1,
       spacedRepetitionIntensity
     )
     void persistReviewData()
 
-    const nextRoot = inlineDetour.pendingInlines[0]
-    if (nextRoot) {
-      detourWrongCountRef.current = 0
-      setIsRetryingVariation(false)
-      setInlineDetour({
-        forkFen: inlineDetour.forkFen,
-        labelForkFen: inlineDetour.labelForkFen,
-        labelSan: nextRoot.san,
-        forkMainlineIndex: inlineDetour.forkMainlineIndex,
-        pendingInlines: inlineDetour.pendingInlines.slice(1),
-        detourLine: [...activeVariationLeadInRef.current, ...flattenDetour(nextRoot)],
-        detourIndex: -1,
-        isIndependent: Boolean(nextRoot.independent),
-      })
-      if (scoreMeta) {
-        activeVariationScoreRef.current = {
-          forkFen: scoreMeta.forkFen,
-          firstSan: nextRoot.san,
-        }
-      }
+    setQuizWrong(null)
+    setRevealedAnswer(false)
+    setIsRetryingVariation(false)
+    wrongCountRef.current = 0
+
+    // If skipping a sideline, return to parent
+    if (parentLineState) {
+      setActiveLine(parentLineState.line)
+      setMoveIndex(parentLineState.moveIndex)
+      wrongCountRef.current = parentLineState.wrongCount
+      setParentLineState(null)
+      setIsSideline(false)
       setBoardResetKey(key => key + 1)
       return
     }
 
-    detourWrongCountRef.current = 0
-    setIsRetryingVariation(false)
-    setInlineDetour(null)
-    activeVariationScoreRef.current = null
-    activeVariationLeadInRef.current = []
+    const next = trainingQueueRef.current[0]
+    if (!next) {
+      setQuizDone(true)
+      return
+    }
+    trainingQueueRef.current = trainingQueueRef.current.slice(1)
+    setTrainingQueue(trainingQueueRef.current)
+    setActiveLine(next)
+    setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor))
     setBoardResetKey(key => key + 1)
   }
 
@@ -1147,10 +957,10 @@ function App() {
             quizWrong={quizWrong}
             wrongGuessTick={wrongGuessTick}
             revealedAnswer={revealedAnswer}
-            inlineDetour={inlineDetour}
             isRetryingVariation={isRetryingVariation}
+            isSideline={isSideline}
+            activeLine={activeLine}
             moveIndex={moveIndex}
-            mainline={mainline}
             currentFen={currentFen}
             soundEnabled={soundEnabled}
             commentsVisible={commentsVisible}
@@ -1163,7 +973,7 @@ function App() {
             }}
             onMove={handleQuizMove}
             onRevealAnswer={revealAnswer}
-            onSkipCurrentVariation={skipCurrentVariation}
+            onSkipCurrentLine={skipCurrentLine}
           />
         )}
       </div>
