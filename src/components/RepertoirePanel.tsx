@@ -109,7 +109,8 @@ export default function RepertoirePanel({
       {studies.map(study => {
         const expanded = expandedStudies.has(study.id)
         let totalMoves = 0
-        let completedMoves = 0
+        let dueMoves = 0
+        let healthyMoves = 0
         let dueLines = 0
 
         study.chapters.forEach((chapter, chapterIndex) => {
@@ -117,14 +118,23 @@ export default function RepertoirePanel({
           const chapterLines = extractTrainableLines(chapter, study.playerColor)
           const chapterScores = scoresByChapter.get(cid) ?? []
 
-          totalMoves += chapterLines.reduce((sum, line) => sum + line.plyCount, 0)
-          completedMoves += chapterLines
-            .filter(line => chapterScores.some(score => score.lineId === line.lineId && score.interval > 0))
-            .reduce((sum, line) => sum + line.plyCount, 0)
-          dueLines += chapterScores.filter(score => new Date(score.dueDate).getTime() <= now).length
+          chapterLines.forEach(line => {
+            const score = chapterScores.find(s => s.lineId === line.lineId && s.interval > 0)
+            totalMoves += line.plyCount
+            if (score) {
+              if (new Date(score.dueDate).getTime() <= now) {
+                dueMoves += line.plyCount
+              } else {
+                healthyMoves += line.plyCount
+              }
+            }
+          })
+          dueLines += chapterScores.filter(score => score.interval > 0 && new Date(score.dueDate).getTime() <= now).length
         })
 
-        const progressPercent = totalMoves > 0 ? Math.round((completedMoves / totalMoves) * 100) : 0
+        const progressPercent = totalMoves > 0 ? Math.round(((dueMoves + healthyMoves) / totalMoves) * 100) : 0
+        const studyHealthyPct = totalMoves > 0 ? (healthyMoves / totalMoves) * 100 : 0
+        const studyDuePct = totalMoves > 0 ? (dueMoves / totalMoves) * 100 : 0
         const allChapterIds = study.chapters.map((_, chapterIndex) => chapterId(study.id, study.chapters, chapterIndex))
         const selectedCount = allChapterIds.filter(id => selectedChapterIds.has(id)).length
         const studyAllSelected = selectedCount === allChapterIds.length
@@ -171,7 +181,8 @@ export default function RepertoirePanel({
               )}
             </div>
             <div className={`rp-progress-wrap ${expanded ? 'rp-progress-wrap-expanded' : 'rp-progress-wrap-collapsed'}`}>
-              <div className="rp-progress-fill" style={{ width: `${progressPercent}%` }} />
+              <div className="rp-progress-seg rp-progress-seg-healthy" style={{ width: `${studyHealthyPct}%` }} />
+              <div className="rp-progress-seg rp-progress-seg-due" style={{ width: `${studyDuePct}%` }} />
             </div>
             {expanded && (
               <div className="rp-chapters-wrap">
@@ -181,14 +192,21 @@ export default function RepertoirePanel({
                   const chapterVariationDetails = collectChapterVariationDetails(chapter)
                   const chapterScores = scoresByChapter.get(cid) ?? []
                   const chapterTotalMoves = chapterLines.reduce((sum, line) => sum + line.plyCount, 0)
-                  const chapterCompletedMoves = chapterLines
-                    .filter(line => {
-                      const lineScore = scoreForLine(chapterScores, line.lineId)
-                      return Boolean(lineScore && lineScore.interval > 0)
-                    })
-                    .reduce((sum, line) => sum + line.plyCount, 0)
-                  const chapterDue = chapterScores.filter(score => new Date(score.dueDate).getTime() <= now).length
-                  const chapterPercent = chapterTotalMoves > 0 ? Math.round((chapterCompletedMoves / chapterTotalMoves) * 100) : 0
+                  let chapterDueMoves = 0
+                  let chapterHealthyMoves = 0
+                  chapterLines.forEach(line => {
+                    const lineScore = scoreForLine(chapterScores, line.lineId)
+                    if (!lineScore || lineScore.interval <= 0) return
+                    if (new Date(lineScore.dueDate).getTime() <= now) {
+                      chapterDueMoves += line.plyCount
+                    } else {
+                      chapterHealthyMoves += line.plyCount
+                    }
+                  })
+                  const chapterDue = chapterScores.filter(score => score.interval > 0 && new Date(score.dueDate).getTime() <= now).length
+                  const chapterPercent = chapterTotalMoves > 0 ? Math.round(((chapterDueMoves + chapterHealthyMoves) / chapterTotalMoves) * 100) : 0
+                  const chapterHealthyPct = chapterTotalMoves > 0 ? (chapterHealthyMoves / chapterTotalMoves) * 100 : 0
+                  const chapterDuePct = chapterTotalMoves > 0 ? (chapterDueMoves / chapterTotalMoves) * 100 : 0
                   const chapterSelected = selectedChapterIds.has(cid)
                   const chapterDueIn = formatDueIn(chapterScores, now)
                   const chapterExpanded = expandedChapters.has(cid)
@@ -257,10 +275,8 @@ export default function RepertoirePanel({
                         )}
                       </div>
                       <div className="rp-chapter-progress-wrap">
-                        <div
-                          className={`rp-chapter-progress-fill ${chapterDue > 0 ? 'rp-chapter-progress-fill-due' : 'rp-chapter-progress-fill-ok'}`}
-                          style={{ width: `${chapterPercent}%` }}
-                        />
+                        <div className="rp-chapter-progress-seg rp-chapter-progress-seg-healthy" style={{ width: `${chapterHealthyPct}%` }} />
+                        <div className="rp-chapter-progress-seg rp-chapter-progress-seg-due" style={{ width: `${chapterDuePct}%` }} />
                       </div>
                       {chapterExpanded && (
                         <div className="rp-variation-list">
@@ -269,8 +285,11 @@ export default function RepertoirePanel({
                           ) : (
                             chapterVariationDetails.map((variation, variationIndex) => {
                               const lineScore = scoreForLine(chapterScores, variation.lineId)
-                              const completed = Boolean(lineScore && lineScore.interval > 0)
                               const dueLabel = formatVariationDue(lineScore, now)
+                              const varState = (() => {
+                                if (!lineScore || lineScore.interval <= 0) return 'pending'
+                                return new Date(lineScore.dueDate).getTime() <= now ? 'due' : 'complete'
+                              })()
 
                               return (
                               <div key={`${cid}-${variationIndex}`} className="rp-variation-row">
@@ -284,8 +303,8 @@ export default function RepertoirePanel({
                                 </div>
                                 <div className="rp-variation-progress-wrap">
                                   <div
-                                    className={`rp-variation-progress-fill ${completed ? 'rp-variation-progress-fill-complete' : 'rp-variation-progress-fill-pending'}`}
-                                    style={{ width: `${completed ? 100 : 0}%` }}
+                                    className={`rp-variation-progress-fill rp-variation-progress-fill-${varState}`}
+                                    style={{ width: '100%' }}
                                   />
                                 </div>
                               </div>

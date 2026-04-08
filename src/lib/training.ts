@@ -45,7 +45,13 @@ export function findQuizStartMoveIndex(
   line: Array<{ fen: string }>,
   userColor: 'w' | 'b',
   targetUserTurn = QUIZ_START_USER_TURN,
+  label?: string,
 ): number {
+  // If the variation name starts with "Theme", quiz from the beginning
+  if (label?.startsWith('Theme')) {
+    return -1
+  }
+
   let userTurnCount = 0
 
   for (let moveToPlayIndex = 0; moveToPlayIndex < line.length; moveToPlayIndex++) {

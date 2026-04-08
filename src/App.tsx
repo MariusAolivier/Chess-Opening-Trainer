@@ -451,7 +451,7 @@ function App() {
     wrongCountRef.current = 0
     setParentLineState(null)
     setIsSideline(false)
-    setMoveIndex(findQuizStartMoveIndex(selectedChapter, first.line, userColor))
+    setMoveIndex(findQuizStartMoveIndex(selectedChapter, first.line, userColor, undefined, first.label))
     setBoardResetKey(key => key + 1)
   }, [quizMode, selectedChapter, selectedStudyId, selectedRunPriority, userColor, trainingSessionKey])
 
@@ -511,7 +511,7 @@ function App() {
           setRevealedAnswer(false)
           setIsRetryingVariation(true)
           wrongCountRef.current = 0
-          setMoveIndex(isSideline ? -1 : findQuizStartMoveIndex(selectedChapter, line, userColor))
+          setMoveIndex(isSideline ? -1 : findQuizStartMoveIndex(selectedChapter, line, userColor, undefined, activeLine.label))
           setBoardResetKey(key => key + 1)
         }, VARIATION_COMPLETE_DELAY_MS)
         return () => clearTimeout(timeout)
@@ -547,7 +547,7 @@ function App() {
         trainingQueueRef.current = trainingQueueRef.current.slice(1)
         setTrainingQueue(trainingQueueRef.current)
         setActiveLine(next)
-        setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor))
+        setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor, undefined, next.label))
         setBoardResetKey(key => key + 1)
       }, VARIATION_COMPLETE_DELAY_MS)
       return () => clearTimeout(timeout)
@@ -860,7 +860,7 @@ function App() {
     trainingQueueRef.current = trainingQueueRef.current.slice(1)
     setTrainingQueue(trainingQueueRef.current)
     setActiveLine(next)
-    setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor))
+    setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor, undefined, next.label))
     setBoardResetKey(key => key + 1)
   }
 

@@ -86,6 +86,7 @@
   height: 4px;
   background: #1e1e1e;
   overflow: hidden;
+  display: flex;
 }
 
 .rp-progress-wrap-expanded {
@@ -99,6 +100,19 @@
 .rp-progress-fill {
   height: 100%;
   background: #3a6a3a;
+}
+
+.rp-progress-seg {
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.rp-progress-seg-healthy {
+  background: #3a6a3a;
+}
+
+.rp-progress-seg-due {
+  background: #8a5a1a;
 }
 
 .rp-chapters-wrap {
@@ -214,6 +228,7 @@
   background: #1a1a2a;
   border-radius: 0 0 3px 3px;
   overflow: hidden;
+  display: flex;
 }
 
 .rp-chapter-progress-fill {
@@ -226,6 +241,19 @@
 
 .rp-chapter-progress-fill-ok {
   background: #2a5a2a;
+}
+
+.rp-chapter-progress-seg {
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.rp-chapter-progress-seg-healthy {
+  background: #2a5a2a;
+}
+
+.rp-chapter-progress-seg-due {
+  background: #6a4a20;
 }
 
 .rp-variation-list {
@@ -305,8 +333,12 @@
   background: #3f8a53;
 }
 
+.rp-variation-progress-fill-due {
+  background: #8a5218;
+}
+
 .rp-variation-progress-fill-pending {
-  background: #6a6f8d;
+  background: #3a3d52;
 }
 
 .rp-variation-empty {
