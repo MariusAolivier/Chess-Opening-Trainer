@@ -406,7 +406,14 @@ function App() {
 
       for (const alt of dueSidelines) {
         const forkMoveIndex = alt.pathFromStart.length
-        const parent = filtered.find(line => line.line.length > forkMoveIndex)
+        const parent = filtered.find(line => {
+          if (line.line.length <= forkMoveIndex) return false
+          // The FEN before the fork move must match the sideline's fork FEN
+          const fenAtFork = forkMoveIndex === 0
+            ? selectedChapter.startFen
+            : line.line[forkMoveIndex - 1]?.fen
+          return fenAtFork === alt.forkFen
+        })
         if (!parent) continue
 
         const sidelineMoves = flattenLine(alt.alternative)
@@ -498,13 +505,13 @@ function App() {
     if (nextIndex >= line.length) {
       recordLineReview()
 
-      if (repeatFailedVariationsEnabled && wrongCountRef.current > 0 && !isRetryingVariation) {
+      if (repeatFailedVariationsEnabled && wrongCountRef.current > 0) {
         const timeout = setTimeout(() => {
           setQuizWrong(null)
           setRevealedAnswer(false)
           setIsRetryingVariation(true)
           wrongCountRef.current = 0
-          setMoveIndex(-1)
+          setMoveIndex(isSideline ? -1 : findQuizStartMoveIndex(selectedChapter, line, userColor))
           setBoardResetKey(key => key + 1)
         }, VARIATION_COMPLETE_DELAY_MS)
         return () => clearTimeout(timeout)
