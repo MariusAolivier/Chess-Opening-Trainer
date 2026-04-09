@@ -56,6 +56,13 @@ function lineDepth(nodes: MoveNode[]): number {
   return depth
 }
 
+/** True if any position along the primary path has alternative continuations */
+function hasForks(nodes: MoveNode[]): boolean {
+  if (nodes.length > 1) return true
+  if (nodes.length === 0) return false
+  return hasForks(nodes[0].children)
+}
+
 /** Variations longer than this many plies get their own session; shorter ones are inlined */
 const INLINE_MAX_DEPTH = 6
 
@@ -131,8 +138,9 @@ function buildLine(
       comment: [varFirst.commentMove, varFirst.commentAfter].filter(Boolean).join(' ') || undefined,
       annotation: annotationFromMove(varFirst.notation.notation, varFirst.nag),
       children: altChildren,
-      // Branches inside variations become independent roots so short sidelines stay attached to them.
-      independent: variationNesting > 0 || depth > INLINE_MAX_DEPTH,
+      // Short linear branches are inlined as sideline detours; long ones or those
+      // containing forks become independent so their nested lines are reachable.
+      independent: depth > INLINE_MAX_DEPTH || hasForks(altChildren),
     } satisfies MoveNode]
   })
 
