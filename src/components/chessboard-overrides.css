@@ -1,10 +1,8 @@
-/* Override chessground's hardcoded left:24px — not needed when ranksPosition is 'right' (default) */
-.cg-wrap coords.files {
-  left: 19px !important;
-}
+/* chessground file coordinate alignment is handled in App.css */
 
 .cg-board-shell {
   position: relative;
+  touch-action: none;
 }
 
 .cg-annotation-glyph {

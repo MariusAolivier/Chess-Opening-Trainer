@@ -251,6 +251,15 @@ export default function Chessboard({ fen, annotation, readonly = false, soundEna
     }
   }, [readonly, playerColor, orientation, boardSize, soundEnabled]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Invalidate chessground's cached board bounds after every render.
+  // Elements above the board (move-info bar, chapter title, etc.) can appear or
+  // change height between renders, shifting the board's viewport position without
+  // triggering a chessground resize. Clearing the memo is O(1); the next user
+  // interaction will recompute getBoundingClientRect() with the correct position.
+  useEffect(() => {
+    groundRef.current?.state.dom.bounds.clear()
+  })
+
   // Update position + dests when fen or resetKey changes
   useEffect(() => {
     const g = groundRef.current

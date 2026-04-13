@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import Chessboard from '../Chessboard'
 import type { Chapter } from '../../lib/pgn'
 import type { StoredStudy } from '../../lib/storage'
-import type { FlatMove, TrainingLine } from '../../lib/training'
+import type { TrainingLine } from '../../lib/training'
 import './TrainingView.css'
 
 interface QueuePreviewItem {

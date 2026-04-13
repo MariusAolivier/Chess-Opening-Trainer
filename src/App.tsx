@@ -38,6 +38,7 @@ import {
   updateForkMainlines,
   findConflicts,
   type ConflictInfo,
+  type ScoreRecord,
   getReviewStreak,
 } from './lib/scores'
 import {
@@ -71,7 +72,6 @@ import {
   findScoreForLine,
   pickNextChapterForTraining,
   todayDayKey,
-  type ChapterForkAlternative,
 } from './lib/appHelpers'
 import { useInitialSync } from './hooks/useInitialSync'
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation'
@@ -100,7 +100,7 @@ function App() {
   const [trainingSessionKey, setTrainingSessionKey] = useState(0)
   const [isRetryingVariation, setIsRetryingVariation] = useState(false)
   const [boardResetKey, setBoardResetKey] = useState(0)
-  const [parentLineState, setParentLineState] = useState<{ line: TrainingLine; moveIndex: number; wrongCount: number } | null>(null)
+  const [parentLineState, setParentLineState] = useState<{ line: TrainingLine; moveIndex: number; wrongCount: number; sidelineStartFen: string } | null>(null)
   const [isSideline, setIsSideline] = useState(false)
 
   const [error, setError] = useState<string | null>(null)
@@ -177,8 +177,8 @@ function App() {
     void persistReviewData()
   }
 
-  function lineSortKey(lineId: string, cid: string): { priority: number; dueAt: number } {
-    const score = findScoreForLine(loadScores(), cid, lineId)
+  function lineSortKey(lineId: string, cid: string, scores: ScoreRecord[]): { priority: number; dueAt: number } {
+    const score = findScoreForLine(scores, cid, lineId)
     if (!score || !score.lastReviewedAt || score.interval <= 0) {
       return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
     }
@@ -262,29 +262,9 @@ function App() {
     return line
   }, [selectedChapter])
 
-  const queuePreviewItems = useMemo(() => {
-    const scores = loadScores()
-    const now = Date.now()
-    const priorityOrder: Array<0 | 1 | 2> = [0, 1, 2]
-
-    function linePriorityInfo(cid: string, lineId: string): { priority: 0 | 1 | 2; dueAt: number } {
-      const score = findScoreForLine(scores, cid, lineId)
-      if (!score || !score.lastReviewedAt || score.interval <= 0) {
-        return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-      }
-      const dueAt = Date.parse(score.dueDate)
-      if (!Number.isNaN(dueAt) && dueAt <= now) return { priority: 1, dueAt }
-      return { priority: 2, dueAt: Number.POSITIVE_INFINITY }
-    }
-
-    const baseItems = trainingQueue.slice(0, MAX_QUEUE_SIZE).map(item => ({
-      label: item.label,
-      chapterTitle: selectedChapter?.title ?? '',
-    }))
-
-    if (selectedChapterIds.size <= 1 || baseItems.length >= MAX_QUEUE_SIZE) {
-      return baseItems
-    }
+  // Cache the expensive PGN tree walk — only recompute when studies or selection change, not on every score update
+  const selectedChapterVariations = useMemo(() => {
+    if (selectedChapterIds.size <= 1) return []
 
     const allSelectedEntries = storedStudies.flatMap(study =>
       study.chapters
@@ -309,22 +289,55 @@ function App() {
       return left.cid.localeCompare(right.cid)
     })
 
-    if (ordered.length <= 1) return baseItems
-
-    const projected = ordered.flatMap(entry => {
+    return ordered.flatMap(entry => {
       const variationDetails = collectChapterVariationDetails(entry.chapter)
+      return variationDetails.map(detail => ({
+        lineId: detail.lineId,
+        label: detail.branchLabel,
+        chapterTitle: entry.chapter.title,
+        cid: entry.cid,
+        studyName: entry.study.name.toLocaleLowerCase(),
+        chapterName: entry.chapter.title.toLocaleLowerCase(),
+      }))
+    })
+  }, [selectedChapterIds, storedStudies])
 
-      return variationDetails.map(detail => {
-        const priorityInfo = linePriorityInfo(entry.cid, detail.lineId)
-        return {
-          label: detail.branchLabel,
-          chapterTitle: entry.chapter.title,
-          priority: priorityInfo.priority,
-          dueAt: priorityInfo.dueAt,
-          studyName: entry.study.name.toLocaleLowerCase(),
-          chapterName: entry.chapter.title.toLocaleLowerCase(),
-        }
-      })
+  const queuePreviewItems = useMemo(() => {
+    const scores = loadScores()
+    const now = Date.now()
+    const priorityOrder: Array<0 | 1 | 2> = [0, 1, 2]
+
+    function linePriorityInfo(cid: string, lineId: string): { priority: 0 | 1 | 2; dueAt: number } {
+      const score = findScoreForLine(scores, cid, lineId)
+      if (!score || !score.lastReviewedAt || score.interval <= 0) {
+        return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
+      }
+      const dueAt = Date.parse(score.dueDate)
+      if (!Number.isNaN(dueAt) && dueAt <= now) return { priority: 1, dueAt }
+      return { priority: 2, dueAt: Number.POSITIVE_INFINITY }
+    }
+
+    const baseItems = trainingQueue.slice(0, MAX_QUEUE_SIZE).map(item => ({
+      label: item.label,
+      chapterTitle: selectedChapter?.title ?? '',
+    }))
+
+    if (selectedChapterIds.size <= 1 || baseItems.length >= MAX_QUEUE_SIZE) {
+      return baseItems
+    }
+
+    if (selectedChapterVariations.length <= 0) return baseItems
+
+    const projected = selectedChapterVariations.map(entry => {
+      const priorityInfo = linePriorityInfo(entry.cid, entry.lineId)
+      return {
+        label: entry.label,
+        chapterTitle: entry.chapterTitle,
+        priority: priorityInfo.priority,
+        dueAt: priorityInfo.dueAt,
+        studyName: entry.studyName,
+        chapterName: entry.chapterName,
+      }
     })
 
     const orderRank = new Map(priorityOrder.map((priority, index) => [priority, index] as const))
@@ -345,7 +358,7 @@ function App() {
       label: item.label,
       chapterTitle: item.chapterTitle,
     }))
-  }, [trainingQueue, selectedChapterIds, storedStudies, statsKey, selectedChapter])
+  }, [trainingQueue, selectedChapterIds, selectedChapterVariations, statsKey, selectedChapter])
 
   const totalDue = useMemo(() => {
     const scores = loadScores()
@@ -371,12 +384,14 @@ function App() {
       ? chapterId(selectedStudyId, chapters, chapterIndex)
       : null
 
+    const allScores = loadScores()
+
     const filtered = (() => {
       if (!cid) return allLines
 
       const withPriority = allLines.map(line => ({
         line,
-        sortKey: lineSortKey(line.lineId, cid),
+        sortKey: lineSortKey(line.lineId, cid, allScores),
       }))
 
       const allowedPriorities: number[] = selectedRunPriority === null || selectedRunPriority === 0
@@ -394,11 +409,10 @@ function App() {
 
     // Attach due sidelines to parent lines
     if (cid && sidelineAlts.length > 0) {
-      const scores = loadScores()
       const now = Date.now()
 
       const dueSidelines = sidelineAlts.filter(alt => {
-        const score = findScoreForLine(scores, cid, alt.lineId)
+        const score = findScoreForLine(allScores, cid, alt.lineId)
         if (!score || !score.lastReviewedAt || score.interval <= 0) return true
         const dueAt = Date.parse(score.dueDate)
         return !Number.isNaN(dueAt) && dueAt <= now
