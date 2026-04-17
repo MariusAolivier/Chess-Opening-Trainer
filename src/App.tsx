@@ -77,12 +77,17 @@ import { useInitialSync } from './hooks/useInitialSync'
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation'
 import { useLichessSync } from './hooks/useLichessSync'
 
+type GlobalEntry = { line: TrainingLine; chapter: Chapter; study: StoredStudy; cid: string }
+
 function App() {
   const MAX_QUEUE_SIZE = 10
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const wrongCountRef = useRef(0)
   const trainingQueueRef = useRef<TrainingLine[]>([])
+  const globalQueueRef = useRef<GlobalEntry[]>([])
+  const isGlobalSessionRef = useRef(false)
+  const globalSessionDoneRef = useRef(false)
 
   const [view, setView] = useState<'home' | 'repertoire' | 'training'>('home')
   const [storedStudies, setStoredStudies] = useState<StoredStudy[]>(() => loadStudies())
@@ -237,9 +242,79 @@ function App() {
   }
 
   function stopQuiz() {
+    isGlobalSessionRef.current = false
+    globalSessionDoneRef.current = false
+    globalQueueRef.current = []
     setQuizMode(false)
     resetTrainingProgress()
   }
+  function startGlobalTrainingSession() {
+    const scores = loadScores()
+    const now = Date.now()
+    const entries: GlobalEntry[] = []
+
+    storedStudies.forEach(study => {
+      study.chapters.forEach((chapter, chapterIndex) => {
+        const cid = chapterId(study.id, study.chapters, chapterIndex)
+        const chapterLines = extractLines(chapter, study.playerColor)
+        syncChapterLines(cid, new Set(chapterLines.map(l => l.lineId)))
+        chapterLines.forEach(l => initScore(cid, l.lineId, l.displaySan))
+        const { lines: allLines } = buildChapterTrainingLines(chapter)
+        const chapterScores = scores.filter(s => s.chapterId === cid)
+        for (const trainingLine of allLines) {
+          const score = findScoreForLine(chapterScores, cid, trainingLine.lineId)
+          const dueAt = score ? Date.parse(score.dueDate) : Number.NaN
+          const isDue =
+            !score ||
+            !score.lastReviewedAt ||
+            score.interval <= 0 ||
+            (!Number.isNaN(dueAt) && dueAt <= now)
+          if (isDue) {
+            entries.push({ line: { ...trainingLine, chapterTitle: chapter.title }, chapter, study, cid })
+          }
+        }
+      })
+    })
+
+    if (entries.length === 0) return
+
+    entries.sort((a, b) => {
+      const aKey = lineSortKey(a.line.lineId, a.cid, scores)
+      const bKey = lineSortKey(b.line.lineId, b.cid, scores)
+      if (aKey.priority !== bKey.priority) return aKey.priority - bKey.priority
+      return aKey.dueAt - bKey.dueAt
+    })
+
+    isGlobalSessionRef.current = true
+    globalSessionDoneRef.current = false
+    const [first, ...rest] = entries
+    globalQueueRef.current = rest
+
+    const firstUserColor = first.study.playerColor === 'white' ? 'w' : 'b'
+    setSelectedChapter(first.chapter)
+    setSelectedStudyId(first.study.id)
+    setChapters(first.study.chapters)
+    setActivePlayerColor(first.study.playerColor)
+    setSelectedRunPriority(null)
+    setActiveLine(first.line)
+    setMoveIndex(findQuizStartMoveIndex(first.chapter, first.line.line, firstUserColor, undefined, first.line.label))
+    setQuizDone(false)
+    setQuizWrong(null)
+    setWrongGuessTick(0)
+    setRevealedAnswer(false)
+    setIsRetryingVariation(false)
+    setParentLineState(null)
+    setIsSideline(false)
+    wrongCountRef.current = 0
+    const queueLines = rest.map(e => e.line).slice(0, MAX_QUEUE_SIZE)
+    trainingQueueRef.current = queueLines
+    setTrainingQueue(queueLines)
+    setStatsKey(k => k + 1)
+    setQuizMode(true)
+    setBoardResetKey(k => k + 1)
+    setView('training')
+  }
+
   useInitialSync({
     setSyncStatus,
     setSyncError,
@@ -319,7 +394,7 @@ function App() {
 
     const baseItems = trainingQueue.slice(0, MAX_QUEUE_SIZE).map(item => ({
       label: item.label,
-      chapterTitle: selectedChapter?.title ?? '',
+      chapterTitle: item.chapterTitle ?? selectedChapter?.title ?? '',
     }))
 
     if (selectedChapterIds.size <= 1 || baseItems.length >= MAX_QUEUE_SIZE) {
@@ -370,12 +445,14 @@ function App() {
   const streak = useMemo(() => getReviewStreak(), [statsKey])
 
   useEffect(() => {
+    if (isGlobalSessionRef.current) return
     resetTrainingProgress()
   }, [selectedChapter])
 
   // Build queue and start first line when quiz begins
   useEffect(() => {
     if (!quizMode || !selectedChapter) return
+    if (isGlobalSessionRef.current) return
 
     const { lines: allLines, sidelineAlts } = buildChapterTrainingLines(selectedChapter)
 
@@ -394,11 +471,13 @@ function App() {
         sortKey: lineSortKey(line.lineId, cid, allScores),
       }))
 
-      const allowedPriorities: number[] = selectedRunPriority === null || selectedRunPriority === 0
+      const allowedPriorities: number[] = selectedRunPriority === null
         ? [0, 1, 2]
-        : selectedRunPriority === 1
-          ? [1, 2]
-          : [2]
+        : selectedRunPriority === 0
+          ? [0]
+          : selectedRunPriority === 1
+            ? [1]
+            : [2]
 
       return allowedPriorities.flatMap(p =>
         withPriority
@@ -553,6 +632,30 @@ function App() {
         setIsRetryingVariation(false)
         wrongCountRef.current = 0
 
+        if (isGlobalSessionRef.current) {
+          const nextEntry = globalQueueRef.current[0]
+          if (!nextEntry) {
+            isGlobalSessionRef.current = false
+            globalSessionDoneRef.current = true
+            setQuizDone(true)
+            return
+          }
+          globalQueueRef.current = globalQueueRef.current.slice(1)
+          const queueLines = globalQueueRef.current.map(e => e.line).slice(0, MAX_QUEUE_SIZE)
+          trainingQueueRef.current = queueLines
+          setTrainingQueue(queueLines)
+          if (nextEntry.chapter !== selectedChapter) {
+            setSelectedChapter(nextEntry.chapter)
+            setSelectedStudyId(nextEntry.study.id)
+            setChapters(nextEntry.study.chapters)
+            setActivePlayerColor(nextEntry.study.playerColor)
+          }
+          const nextUserColor = nextEntry.study.playerColor === 'white' ? 'w' : 'b'
+          setActiveLine(nextEntry.line)
+          setMoveIndex(findQuizStartMoveIndex(nextEntry.chapter, nextEntry.line.line, nextUserColor, undefined, nextEntry.line.label))
+          setBoardResetKey(key => key + 1)
+          return
+        }
         const next = trainingQueueRef.current[0]
         if (!next) {
           setQuizDone(true)
@@ -581,6 +684,10 @@ function App() {
   useEffect(() => {
     if (!quizDone) return
     maybeFireDailyChapterStreakAnimation()
+    if (globalSessionDoneRef.current) {
+      globalSessionDoneRef.current = false
+      return
+    }
     const timeout = setTimeout(() => pickAndTrainNext(), 500)
     return () => clearTimeout(timeout)
   }, [quizDone])
@@ -768,8 +875,13 @@ function App() {
     setView('training')
   }
 
-  function pickAndTrainNext() {
-    const picked = pickNextChapterForTraining(storedStudies, selectedChapterIds, Date.now(), loadScores())
+  function pickAndTrainNext(chapterIdsOverride?: Set<string>) {
+    const picked = pickNextChapterForTraining(
+      storedStudies,
+      chapterIdsOverride ?? selectedChapterIds,
+      Date.now(),
+      loadScores(),
+    )
     if (!picked) return
     trainChapter(picked.study, picked.chapterIndex, picked.priority)
   }
@@ -963,7 +1075,7 @@ function App() {
             storedStudies={storedStudies}
             homeFen={homeFen}
             soundEnabled={soundEnabled}
-            onTrainNow={pickAndTrainNext}
+            onTrainNow={startGlobalTrainingSession}
             onOpenRepertoire={() => setView('repertoire')}
           />
         ) : view === 'repertoire' ? (

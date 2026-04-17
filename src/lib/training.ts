@@ -17,11 +17,16 @@ export type TrainingLine = {
   lineId: string
   label: string
   scoreDisplaySan: string
+  chapterTitle?: string
   sidelines?: SidelineAttachment[]
 }
 
 export const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const QUIZ_START_USER_TURN = 3
+
+function isThemeChapter(name?: string): boolean {
+  return name?.trimStart().toLocaleLowerCase().startsWith('theme') ?? false
+}
 
 export const HOME_FENS = [
   'rnbqkbnr/pppp1ppp/4p3/8/3PP3/8/PPP2PPP/RNBQKBNR b KQkq - 0 2',
@@ -47,8 +52,8 @@ export function findQuizStartMoveIndex(
   targetUserTurn = QUIZ_START_USER_TURN,
   label?: string,
 ): number {
-  // If the variation name starts with "Theme", quiz from the beginning
-  if (label?.startsWith('Theme')) {
+  // Theme chapters start training from the chapter's start FEN (move 1 to play).
+  if (isThemeChapter(chapter.title) || isThemeChapter(label)) {
     return -1
   }
 

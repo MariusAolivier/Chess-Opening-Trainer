@@ -267,7 +267,7 @@ export function pickNextChapterForTraining(
   return {
     study: picked.study,
     chapterIndex: picked.chapterIndex,
-    priority: null,
+    priority: dueEntries.length > 0 ? 1 : null,
     chapterId: chapterId(picked.study.id, picked.study.chapters, picked.chapterIndex),
   }
 }
