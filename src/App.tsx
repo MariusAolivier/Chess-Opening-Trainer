@@ -259,8 +259,11 @@ function App() {
         const chapterLines = extractLines(chapter, study.playerColor)
         syncChapterLines(cid, new Set(chapterLines.map(l => l.lineId)))
         chapterLines.forEach(l => initScore(cid, l.lineId, l.displaySan))
-        const { lines: allLines } = buildChapterTrainingLines(chapter)
+        const { lines: allLines, sidelineAlts } = buildChapterTrainingLines(chapter)
         const chapterScores = scores.filter(s => s.chapterId === cid)
+
+        // Collect due main lines for this chapter
+        const dueLines: TrainingLine[] = []
         for (const trainingLine of allLines) {
           const score = findScoreForLine(chapterScores, cid, trainingLine.lineId)
           const dueAt = score ? Date.parse(score.dueDate) : Number.NaN
@@ -270,8 +273,53 @@ function App() {
             score.interval <= 0 ||
             (!Number.isNaN(dueAt) && dueAt <= now)
           if (isDue) {
-            entries.push({ line: { ...trainingLine, chapterTitle: chapter.title }, chapter, study, cid })
+            dueLines.push({ ...trainingLine, chapterTitle: chapter.title })
           }
+        }
+
+        // Attach due sidelines to their parent lines (mirrors per-chapter queue-build effect)
+        if (sidelineAlts.length > 0) {
+          const dueSidelines = sidelineAlts.filter(alt => {
+            const score = findScoreForLine(chapterScores, cid, alt.lineId)
+            if (!score || !score.lastReviewedAt || score.interval <= 0) return true
+            const dueAt = Date.parse(score.dueDate)
+            return !Number.isNaN(dueAt) && dueAt <= now
+          })
+
+          for (const alt of dueSidelines) {
+            const forkMoveIndex = alt.pathFromStart.length
+            const parent = dueLines.find(line => {
+              if (line.line.length <= forkMoveIndex) return false
+              const fenAtFork = forkMoveIndex === 0
+                ? chapter.startFen
+                : line.line[forkMoveIndex - 1]?.fen
+              return fenAtFork === alt.forkFen
+            })
+            if (!parent) continue
+
+            const sidelineMoves = flattenLine(alt.alternative)
+            const attachment: SidelineAttachment = {
+              forkMoveIndex,
+              sidelineLine: {
+                line: sidelineMoves,
+                lineId: alt.lineId,
+                label: alt.branchLabel,
+                scoreDisplaySan: alt.alternative.san,
+              },
+            }
+            if (!parent.sidelines) parent.sidelines = []
+            parent.sidelines.push(attachment)
+          }
+
+          for (const line of dueLines) {
+            if (line.sidelines) {
+              line.sidelines.sort((a, b) => a.forkMoveIndex - b.forkMoveIndex)
+            }
+          }
+        }
+
+        for (const line of dueLines) {
+          entries.push({ line, chapter, study, cid })
         }
       })
     })
