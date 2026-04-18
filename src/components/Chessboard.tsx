@@ -121,6 +121,12 @@ function annotationColorClass(annotation: string): string {
       return 'cg-annotation-brilliant'
     case '?!':
       return 'cg-annotation-questionable'
+    case '!?':
+      return 'cg-annotation-interesting'
+    case '□':
+      return 'cg-annotation-only-move'
+    case '=':
+      return 'cg-annotation-equal'
     default:
       return 'cg-annotation-default'
   }

@@ -33,11 +33,11 @@
 }
 
 .cg-annotation-good {
-  background: #57d26f;
+  background: #4fdf6c;
 }
 
 .cg-annotation-inaccuracy {
-  background: #f4d35e;
+  background: #d2b136;
 }
 
 .cg-annotation-blunder {
@@ -45,9 +45,21 @@
 }
 
 .cg-annotation-brilliant {
-  background: #2ec4b6;
+  background: #26beaf;
 }
 
 .cg-annotation-questionable {
-  background: #4a90e2;
+  background: #ecfc3f;
+}
+
+.cg-annotation-interesting {
+  background: #9b59b6;
+}
+
+.cg-annotation-only-move {
+  background: #2596be;
+}
+
+.cg-annotation-equal {
+  background: #a3a8ae;
 }
