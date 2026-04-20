@@ -248,7 +248,7 @@ function App() {
     setQuizMode(false)
     resetTrainingProgress()
   }
-  function startGlobalTrainingSession() {
+  function startGlobalTrainingSession(chapterIdFilter?: Set<string>) {
     const scores = loadScores()
     const now = Date.now()
     const entries: GlobalEntry[] = []
@@ -256,6 +256,7 @@ function App() {
     storedStudies.forEach(study => {
       study.chapters.forEach((chapter, chapterIndex) => {
         const cid = chapterId(study.id, study.chapters, chapterIndex)
+        if (chapterIdFilter && chapterIdFilter.size > 0 && !chapterIdFilter.has(cid)) return
         const chapterLines = extractLines(chapter, study.playerColor)
         syncChapterLines(cid, new Set(chapterLines.map(l => l.lineId)))
         chapterLines.forEach(l => initScore(cid, l.lineId, l.displaySan))
@@ -323,6 +324,52 @@ function App() {
         }
       })
     })
+
+    // Fallback: if nothing is due, queue all lines — new/unreviewed first, then by next due date
+    if (entries.length === 0) {
+      storedStudies.forEach(study => {
+        study.chapters.forEach((chapter, chapterIndex) => {
+          const cid = chapterId(study.id, study.chapters, chapterIndex)
+          if (chapterIdFilter && chapterIdFilter.size > 0 && !chapterIdFilter.has(cid)) return
+          const { lines: allLines, sidelineAlts } = buildChapterTrainingLines(chapter)
+          const notDueLines: TrainingLine[] = allLines.map(l => ({ ...l, chapterTitle: chapter.title }))
+
+          if (sidelineAlts.length > 0) {
+            for (const alt of sidelineAlts) {
+              const forkMoveIndex = alt.pathFromStart.length
+              const parent = notDueLines.find(line => {
+                if (line.line.length <= forkMoveIndex) return false
+                const fenAtFork = forkMoveIndex === 0
+                  ? chapter.startFen
+                  : line.line[forkMoveIndex - 1]?.fen
+                return fenAtFork === alt.forkFen
+              })
+              if (!parent) continue
+
+              const sidelineMoves = flattenLine(alt.alternative)
+              const attachment: SidelineAttachment = {
+                forkMoveIndex,
+                sidelineLine: {
+                  line: sidelineMoves,
+                  lineId: alt.lineId,
+                  label: alt.branchLabel,
+                  scoreDisplaySan: alt.alternative.san,
+                },
+              }
+              if (!parent.sidelines) parent.sidelines = []
+              parent.sidelines.push(attachment)
+            }
+            for (const line of notDueLines) {
+              if (line.sidelines) line.sidelines.sort((a, b) => a.forkMoveIndex - b.forkMoveIndex)
+            }
+          }
+
+          for (const line of notDueLines) {
+            entries.push({ line, chapter, study, cid })
+          }
+        })
+      })
+    }
 
     if (entries.length === 0) return
 
@@ -443,6 +490,7 @@ function App() {
     const baseItems = trainingQueue.slice(0, MAX_QUEUE_SIZE).map(item => ({
       label: item.label,
       chapterTitle: item.chapterTitle ?? selectedChapter?.title ?? '',
+      sidelineCount: item.sidelines?.length ?? 0,
     }))
 
     if (selectedChapterIds.size <= 1 || baseItems.length >= MAX_QUEUE_SIZE) {
@@ -480,6 +528,7 @@ function App() {
     return orderedProjected.slice(0, MAX_QUEUE_SIZE).map(item => ({
       label: item.label,
       chapterTitle: item.chapterTitle,
+      sidelineCount: 0,
     }))
   }, [trainingQueue, selectedChapterIds, selectedChapterVariations, statsKey, selectedChapter])
 
@@ -937,7 +986,7 @@ function App() {
   function trainFromSelection() {
     if (selectedChapterIds.size === 0) return
     setSelectionMode(false)
-    pickAndTrainNext()
+    startGlobalTrainingSession(selectedChapterIds)
   }
 
   function toggleChapter(cid: string) {
