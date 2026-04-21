@@ -143,7 +143,7 @@ export function recordReview(
     interval = Math.max(1, Math.round(baseInterval * intensityIntervalScale(intensity)))
   }
 
-  const dueDate = new Date(Date.now() + interval * 86_400_000).toISOString()
+  const dueDate = new Date(Date.now() + Math.min(interval, 14) * 86_400_000).toISOString()
   const record: ScoreRecord = {
     chapterId,
     lineId,

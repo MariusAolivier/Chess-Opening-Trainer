@@ -258,9 +258,13 @@ function App() {
         const cid = chapterId(study.id, study.chapters, chapterIndex)
         if (chapterIdFilter && chapterIdFilter.size > 0 && !chapterIdFilter.has(cid)) return
         const chapterLines = extractLines(chapter, study.playerColor)
-        syncChapterLines(cid, new Set(chapterLines.map(l => l.lineId)))
-        chapterLines.forEach(l => initScore(cid, l.lineId, l.displaySan))
         const { lines: allLines, sidelineAlts } = buildChapterTrainingLines(chapter)
+        const validLineIds = new Set([
+          ...chapterLines.map(l => l.lineId),
+          ...sidelineAlts.map(alt => alt.lineId),
+        ])
+        syncChapterLines(cid, validLineIds)
+        chapterLines.forEach(l => initScore(cid, l.lineId, l.displaySan))
         const chapterScores = scores.filter(s => s.chapterId === cid)
 
         // Collect due main lines for this chapter
@@ -296,7 +300,18 @@ function App() {
                 : line.line[forkMoveIndex - 1]?.fen
               return fenAtFork === alt.forkFen
             })
-            if (!parent) continue
+            if (!parent) {
+              // Sideline is due but its parent line isn't — queue it as a standalone line
+              const sidelineMoves = flattenLine(alt.alternative)
+              dueLines.push({
+                line: [...alt.pathFromStart, ...sidelineMoves],
+                lineId: alt.lineId,
+                label: alt.branchLabel,
+                scoreDisplaySan: alt.alternative.san,
+                chapterTitle: chapter.title,
+              })
+              continue
+            }
 
             const sidelineMoves = flattenLine(alt.alternative)
             const attachment: SidelineAttachment = {
@@ -560,6 +575,14 @@ function App() {
 
     const allScores = loadScores()
 
+    const allowedPriorities: number[] = selectedRunPriority === null
+      ? [0, 1, 2]
+      : selectedRunPriority === 0
+        ? [0]
+        : selectedRunPriority === 1
+          ? [1]
+          : [2]
+
     const filtered = (() => {
       if (!cid) return allLines
 
@@ -567,14 +590,6 @@ function App() {
         line,
         sortKey: lineSortKey(line.lineId, cid, allScores),
       }))
-
-      const allowedPriorities: number[] = selectedRunPriority === null
-        ? [0, 1, 2]
-        : selectedRunPriority === 0
-          ? [0]
-          : selectedRunPriority === 1
-            ? [1]
-            : [2]
 
       return allowedPriorities.flatMap(p =>
         withPriority
@@ -604,7 +619,19 @@ function App() {
             : line.line[forkMoveIndex - 1]?.fen
           return fenAtFork === alt.forkFen
         })
-        if (!parent) continue
+        if (!parent) {
+          // Sideline is due but its parent line isn't — queue it as a standalone line
+          const sidelineKey = lineSortKey(alt.lineId, cid, allScores)
+          if (!allowedPriorities.includes(sidelineKey.priority)) continue
+          const sidelineMoves = flattenLine(alt.alternative)
+          filtered.push({
+            line: [...alt.pathFromStart, ...sidelineMoves],
+            lineId: alt.lineId,
+            label: alt.branchLabel,
+            scoreDisplaySan: alt.alternative.san,
+          })
+          continue
+        }
 
         const sidelineMoves = flattenLine(alt.alternative)
         const attachment: SidelineAttachment = {
