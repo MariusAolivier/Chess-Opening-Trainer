@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { fetchAndMerge, subscribeToReviewActivity, subscribeToScores, uploadForkMainlines, uploadScores } from '../lib/sync'
 import { loadStudies, type StoredStudy } from '../lib/storage'
+import { capExistingScoreIntervals } from '../lib/scores'
 
 interface UseInitialSyncParams {
   setSyncStatus: Dispatch<SetStateAction<'idle' | 'syncing' | 'ok' | 'error'>>
@@ -19,6 +20,7 @@ export function useInitialSync({
   migrateLegacyChapterIdsForStudies,
 }: UseInitialSyncParams): void {
   useEffect(() => {
+    capExistingScoreIntervals()
     setSyncStatus('syncing')
     fetchAndMerge()
       .then(changed => {

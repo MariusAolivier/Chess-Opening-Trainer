@@ -103,6 +103,20 @@ export function initScore(chapterId: string, lineId: string, displaySan: string)
   save(records)
 }
 
+const MAX_INTERVAL_DAYS = 14
+
+/**
+ * One-time migration: clamp any existing score whose interval exceeds 14 days.
+ * Also adjusts the dueDate so it is no more than 14 days from lastReviewedAt
+ * (or from now if lastReviewedAt is missing).
+ */
+export function capExistingScoreIntervals(): void {
+  const records = load()
+  const capped = applyIntervalCap(records)
+  const changed = capped.some((r, i) => r !== records[i])
+  if (changed) save(capped)
+}
+
 /** Return the score for a specific line, or undefined if never reviewed. */
 export function getScore(chapterId: string, lineId: string): ScoreRecord | undefined {
   return load().find(r => r.chapterId === chapterId && r.lineId === lineId)
@@ -358,7 +372,38 @@ export { makeId as scoreBranchKey }
 
 /** Write a full set of score records (used by sync on remote update). */
 export function importAllScores(records: ScoreRecord[]): void {
-  save(records)
+  const incoming = applyIntervalCap(records)
+  const existing = load()
+
+  // Merge rather than replace: keep any local record not present in the incoming
+  // data, and for conflicts prefer whichever record has the more recent review.
+  // This prevents a Firestore snapshot (echo of a prior write, or an optimistic
+  // write that was reverted on network failure) from discarding a just-recorded
+  // local review that hasn't been uploaded yet.
+  const byId = new Map<string, ScoreRecord>()
+  for (const r of existing) {
+    byId.set(makeId(r.chapterId, r.lineId), r)
+  }
+  for (const r of incoming) {
+    const key = makeId(r.chapterId, r.lineId)
+    const local = byId.get(key)
+    if (!local) {
+      byId.set(key, r)
+    } else {
+      const localTime = local.lastReviewedAt ? Date.parse(local.lastReviewedAt) : 0
+      const incomingTime = r.lastReviewedAt ? Date.parse(r.lastReviewedAt) : 0
+      if (incomingTime > localTime) byId.set(key, r)
+    }
+  }
+  save([...byId.values()])
+}
+
+function applyIntervalCap(records: ScoreRecord[]): ScoreRecord[] {
+  return records.map(r => {
+    if (r.interval <= MAX_INTERVAL_DAYS) return r
+    const base = r.lastReviewedAt ? Date.parse(r.lastReviewedAt) : Date.now()
+    return { ...r, interval: MAX_INTERVAL_DAYS, dueDate: new Date(base + MAX_INTERVAL_DAYS * 86_400_000).toISOString() }
+  })
 }
 
 /** Read the raw fork mainlines array (used by sync to upload). */
