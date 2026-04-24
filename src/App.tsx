@@ -252,6 +252,7 @@ function App() {
     const scores = loadScores()
     const now = Date.now()
     const entries: GlobalEntry[] = []
+    const promotedSidelineLineIds = new Set<string>()
 
     storedStudies.forEach(study => {
       study.chapters.forEach((chapter, chapterIndex) => {
@@ -302,6 +303,7 @@ function App() {
             })
             if (!parent) {
               // Sideline is due but its parent line isn't — queue it as a standalone line
+              promotedSidelineLineIds.add(alt.lineId)
               const sidelineMoves = flattenLine(alt.alternative)
               dueLines.push({
                 line: [...alt.pathFromStart, ...sidelineMoves],
@@ -392,6 +394,9 @@ function App() {
       const aKey = lineSortKey(a.line.lineId, a.cid, scores)
       const bKey = lineSortKey(b.line.lineId, b.cid, scores)
       if (aKey.priority !== bKey.priority) return aKey.priority - bKey.priority
+      const aPromoted = promotedSidelineLineIds.has(a.line.lineId) ? 1 : 0
+      const bPromoted = promotedSidelineLineIds.has(b.line.lineId) ? 1 : 0
+      if (aPromoted !== bPromoted) return aPromoted - bPromoted
       return aKey.dueAt - bKey.dueAt
     })
 
@@ -609,6 +614,8 @@ function App() {
         return !Number.isNaN(dueAt) && dueAt <= now
       })
 
+      const promotedSidelineIds = new Set<string>()
+
       for (const alt of dueSidelines) {
         const forkMoveIndex = alt.pathFromStart.length
         const parent = filtered.find(line => {
@@ -623,6 +630,7 @@ function App() {
           // Sideline is due but its parent line isn't — queue it as a standalone line
           const sidelineKey = lineSortKey(alt.lineId, cid, allScores)
           if (!allowedPriorities.includes(sidelineKey.priority)) continue
+          promotedSidelineIds.add(alt.lineId)
           const sidelineMoves = flattenLine(alt.alternative)
           filtered.push({
             line: [...alt.pathFromStart, ...sidelineMoves],
@@ -653,6 +661,18 @@ function App() {
         if (line.sidelines) {
           line.sidelines.sort((a, b) => a.forkMoveIndex - b.forkMoveIndex)
         }
+      }
+
+      // Re-sort filtered: within each priority class, promoted sidelines go last
+      if (promotedSidelineIds.size > 0) {
+        filtered.sort((a, b) => {
+          const aKey = lineSortKey(a.lineId, cid, allScores)
+          const bKey = lineSortKey(b.lineId, cid, allScores)
+          if (aKey.priority !== bKey.priority) return aKey.priority - bKey.priority
+          const aPromoted = promotedSidelineIds.has(a.lineId) ? 1 : 0
+          const bPromoted = promotedSidelineIds.has(b.lineId) ? 1 : 0
+          return aPromoted - bPromoted
+        })
       }
     }
 
