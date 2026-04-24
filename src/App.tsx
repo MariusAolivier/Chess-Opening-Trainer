@@ -1006,7 +1006,12 @@ function App() {
     const cid = chapterId(study.id, study.chapters, chapterIndex)
 
     const lines = extractLines(chapter, study.playerColor)
-    syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
+    const { sidelineAlts } = buildChapterTrainingLines(chapter)
+    const validLineIds = new Set([
+      ...lines.map(line => line.lineId),
+      ...sidelineAlts.map(alt => alt.lineId),
+    ])
+    syncChapterLines(cid, validLineIds)
     lines.forEach(line => initScore(cid, line.lineId, line.displaySan))
 
     loadChapters(study.chapters, study.playerColor, study.id)
