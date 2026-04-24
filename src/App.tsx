@@ -1127,6 +1127,31 @@ function App() {
       return
     }
 
+    if (isGlobalSessionRef.current) {
+      const nextEntry = globalQueueRef.current[0]
+      if (!nextEntry) {
+        isGlobalSessionRef.current = false
+        globalSessionDoneRef.current = true
+        setQuizDone(true)
+        return
+      }
+      globalQueueRef.current = globalQueueRef.current.slice(1)
+      const queueLines = globalQueueRef.current.map(e => e.line).slice(0, MAX_QUEUE_SIZE)
+      trainingQueueRef.current = queueLines
+      setTrainingQueue(queueLines)
+      if (nextEntry.chapter !== selectedChapter) {
+        setSelectedChapter(nextEntry.chapter)
+        setSelectedStudyId(nextEntry.study.id)
+        setChapters(nextEntry.study.chapters)
+        setActivePlayerColor(nextEntry.study.playerColor)
+      }
+      const nextUserColor = nextEntry.study.playerColor === 'white' ? 'w' : 'b'
+      setActiveLine(nextEntry.line)
+      setMoveIndex(findQuizStartMoveIndex(nextEntry.chapter, nextEntry.line.line, nextUserColor, undefined, nextEntry.line.label))
+      setBoardResetKey(key => key + 1)
+      return
+    }
+
     const next = trainingQueueRef.current[0]
     if (!next) {
       setQuizDone(true)
