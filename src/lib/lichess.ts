@@ -222,3 +222,71 @@ export async function exportLichessStudiesPgn(accessToken: string, username: str
 
   return response.text()
 }
+
+export interface OpeningGameStat {
+  eco: string
+  opening: string
+  color: 'white' | 'black'
+  wins: number
+  draws: number
+  losses: number
+}
+
+interface LichessGameJson {
+  opening?: { eco: string; name: string }
+  winner?: 'white' | 'black'
+  players: {
+    white: { user?: { name: string } }
+    black: { user?: { name: string } }
+  }
+}
+
+export async function fetchLichessGameStats(
+  username: string,
+  accessToken: string | null,
+  maxGames = 200,
+): Promise<OpeningGameStat[]> {
+  const url = new URL(`https://lichess.org/api/games/user/${encodeURIComponent(username)}`)
+  url.searchParams.set('opening', 'true')
+  url.searchParams.set('max', String(maxGames))
+  url.searchParams.set('perfType', 'bullet,blitz,rapid,classical')
+
+  const headers: Record<string, string> = { Accept: 'application/x-ndjson' }
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+
+  const response = await fetch(url.toString(), { headers })
+
+  if (response.status === 401) {
+    clearLichessToken()
+    throw new Error('Lichess session expired, please connect again')
+  }
+  if (!response.ok) throw new Error('Could not fetch Lichess games')
+
+  const text = await response.text()
+  const byKey = new Map<string, OpeningGameStat>()
+  const lowerUser = username.toLowerCase()
+
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    let game: LichessGameJson
+    try { game = JSON.parse(trimmed) as LichessGameJson } catch { continue }
+    if (!game.opening) continue
+
+    const isWhite = game.players.white.user?.name.toLowerCase() === lowerUser
+    const isBlack = game.players.black.user?.name.toLowerCase() === lowerUser
+    if (!isWhite && !isBlack) continue
+
+    const color: 'white' | 'black' = isWhite ? 'white' : 'black'
+    const key = `${game.opening.eco}::${color}`
+    const stat = byKey.get(key) ?? { eco: game.opening.eco, opening: game.opening.name, color, wins: 0, draws: 0, losses: 0 }
+
+    if (!game.winner) stat.draws++
+    else if (game.winner === color) stat.wins++
+    else stat.losses++
+
+    byKey.set(key, stat)
+  }
+
+  return [...byKey.values()].sort((a, b) => (b.wins + b.draws + b.losses) - (a.wins + a.draws + a.losses))
+}

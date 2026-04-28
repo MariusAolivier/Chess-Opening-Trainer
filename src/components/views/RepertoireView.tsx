@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { StoredStudy } from '../../lib/storage'
 import type { ConflictInfo } from '../../lib/scores'
 import RepertoirePanel from '../RepertoirePanel'
+import InsightsView from './InsightsView'
 import './RepertoireView.css'
 
 interface RepertoireViewProps {
@@ -77,6 +78,7 @@ export default function RepertoireView({
 }: RepertoireViewProps) {
   const [showStreakPanel, setShowStreakPanel] = useState(false)
   const [showSettingsPanel, setShowSettingsPanel] = useState(false)
+  const [activeTab, setActiveTab] = useState<'repertoire' | 'insights'>('repertoire')
   const streakPanelRef = useRef<HTMLDivElement>(null)
   const settingsPanelRef = useRef<HTMLDivElement>(null)
 
@@ -224,11 +226,30 @@ export default function RepertoireView({
           </div>
         </div>
 
-        {storedStudies.length === 0 && (
+        <div className="rv-tabs">
+          <button
+            onClick={() => setActiveTab('repertoire')}
+            className={`rv-tab ${activeTab === 'repertoire' ? 'rv-tab-active' : ''}`}
+          >
+            Repertoire
+          </button>
+          <button
+            onClick={() => setActiveTab('insights')}
+            className={`rv-tab ${activeTab === 'insights' ? 'rv-tab-active' : ''}`}
+          >
+            Insights
+          </button>
+        </div>
+
+        {activeTab === 'insights' && (
+          <InsightsView lichessUsername={lichessUsername} />
+        )}
+
+        {activeTab === 'repertoire' && storedStudies.length === 0 && (
           <p className="rv-empty-note">No studies yet. Upload a PGN to get started.</p>
         )}
 
-        <RepertoirePanel
+        {activeTab === 'repertoire' && <RepertoirePanel
           studies={storedStudies}
           onTrainChapter={onTrainChapter}
           onDeleteStudy={onDeleteStudy}
@@ -237,9 +258,9 @@ export default function RepertoireView({
           selectedChapterIds={selectedChapterIds}
           onToggleChapter={onToggleChapter}
           onToggleStudy={onToggleStudy}
-        />
+        />}
 
-        {storedStudies.length > 0 && (
+        {activeTab === 'repertoire' && storedStudies.length > 0 && (
           <div className="rv-select-wrap">
             {!selectionMode ? (
               <button onClick={onEnterSelectionMode} className="rv-select-open-btn">

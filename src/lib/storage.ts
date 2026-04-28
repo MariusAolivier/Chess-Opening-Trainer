@@ -162,3 +162,37 @@ export function legacyChapterId(studyId: string, chapterIndex: number): string {
 export function chapterId(studyId: string, chapters: Chapter[], chapterIndex: number): string {
   return buildChapterIds(studyId, chapters)[chapterIndex]
 }
+
+// ---------------------------------------------------------------------------
+// Insights cache
+// ---------------------------------------------------------------------------
+
+const INSIGHTS_KEY = 'chess-opening-trainer:insights'
+
+export interface CachedGameStat {
+  eco: string
+  opening: string
+  color: 'white' | 'black'
+  wins: number
+  draws: number
+  losses: number
+}
+
+export interface CachedInsights {
+  username: string
+  fetchedAt: string
+  stats: CachedGameStat[]
+}
+
+export function loadInsights(): CachedInsights | null {
+  try {
+    const raw = localStorage.getItem(INSIGHTS_KEY)
+    return raw ? (JSON.parse(raw) as CachedInsights) : null
+  } catch {
+    return null
+  }
+}
+
+export function saveInsights(data: CachedInsights): void {
+  localStorage.setItem(INSIGHTS_KEY, JSON.stringify(data))
+}

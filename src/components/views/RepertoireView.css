@@ -23,9 +23,39 @@
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   width: 100%;
   max-width: 440px;
+}
+
+.rv-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #252d45;
+  padding-bottom: 0;
+}
+
+.rv-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #5a6480;
+  font-size: 0.88rem;
+  font-weight: 500;
+  padding: 6px 14px 8px;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms;
+  margin-bottom: -1px;
+}
+
+.rv-tab:hover {
+  color: #9aa4c8;
+}
+
+.rv-tab-active {
+  color: #a8c0f0;
+  border-bottom-color: #4a70c0;
 }
 
 .rv-left {
