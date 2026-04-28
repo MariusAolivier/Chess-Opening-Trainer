@@ -253,11 +253,16 @@ export function extractLines(chapter: Chapter, playerColor?: 'white' | 'black'):
  * A fork is any position from which the chapter has 2+ continuations (nodes.length > 1).
  * nodes[0] is always the mainline move.
  */
-export function extractForkMoves(chapter: Chapter): Map<string, string> {
+export function extractForkMoves(chapter: Chapter, playerColor?: 'white' | 'black'): Map<string, string> {
+  const playerSide = playerColor === 'white' ? 'w' : playerColor === 'black' ? 'b' : null
   const map = new Map<string, string>()
   function walk(parentFen: string, nodes: MoveNode[]) {
     if (nodes.length === 0) return
-    if (nodes.length > 1) {
+    const sideToMove = parentFen.split(' ')[1]
+    if (playerSide === null || sideToMove === playerSide) {
+      // Record the mainline (recommended) move at every player-turn position so
+      // cross-chapter conflicts are caught even when neither chapter has an
+      // internal fork at that position.
       map.set(parentFen, nodes[0].san)
     }
     for (const node of nodes) {

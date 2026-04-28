@@ -887,7 +887,7 @@ function App() {
       const cid = chapterId(stored.id, stored.chapters, chapterIndex)
       const lines = extractLines(chapter, stored.playerColor)
       syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
-      updateForkMainlines(cid, extractForkMoves(chapter))
+      updateForkMainlines(cid, extractForkMoves(chapter, stored.playerColor))
     })
 
     const allStudies = loadStudies()
