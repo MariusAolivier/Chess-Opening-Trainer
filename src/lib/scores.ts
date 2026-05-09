@@ -103,7 +103,7 @@ export function initScore(chapterId: string, lineId: string, displaySan: string)
   save(records)
 }
 
-const MAX_INTERVAL_DAYS = 14
+const MAX_INTERVAL_DAYS = 30
 
 /**
  * One-time migration: clamp any existing score whose interval exceeds 14 days.
@@ -157,7 +157,7 @@ export function recordReview(
     interval = Math.max(1, Math.round(baseInterval * intensityIntervalScale(intensity)))
   }
 
-  const dueDate = new Date(Date.now() + Math.min(interval, 14) * 86_400_000).toISOString()
+  const dueDate = new Date(Date.now() + Math.min(interval, MAX_INTERVAL_DAYS) * 86_400_000).toISOString()
   const record: ScoreRecord = {
     chapterId,
     lineId,
