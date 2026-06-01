@@ -177,7 +177,7 @@ function App() {
     if (chapterIndex < 0) return
 
     const wrongs = wrongCountRef.current
-    const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs <= 2 ? 3 : 1
+    const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 99 ? 1 : wrongs <= 1 ? 5 : wrongs === 2 ? 4 : 3
     recordReview(chapterId(selectedStudyId, chapters, chapterIndex), activeLine.lineId, activeLine.scoreDisplaySan, quality, spacedRepetitionIntensity)
     void persistReviewData()
   }
