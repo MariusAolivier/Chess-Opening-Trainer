@@ -6,7 +6,7 @@
   gap: 20px;
   padding-bottom: 32px;
   width: 100%;
-  max-width: 400px;
+  max-width: 440px;
 }
 
 .home-header {
@@ -66,6 +66,159 @@
   color: #5a9a5a;
 }
 
+.home-onboarding {
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid #34415f;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #20283d 0%, #191f31 100%);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+.home-onboarding-header {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid #303a55;
+}
+
+.home-onboarding-header h2 {
+  margin: 0 0 5px;
+  color: #eef3ff;
+  font-size: 1.2rem;
+}
+
+.home-onboarding-header p,
+.home-step-content p {
+  margin: 0;
+  color: #9aa7bd;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.home-onboarding-step {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid #303a55;
+}
+
+.home-onboarding-step-last {
+  border-bottom: 0;
+}
+
+.home-step-number {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #416b4c;
+  color: #effff2;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.home-step-number-muted {
+  background: #30384e;
+  color: #8994ac;
+}
+
+.home-step-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.home-step-content h3 {
+  margin: 3px 0 -4px;
+  color: #e4e9f5;
+  font-size: 0.98rem;
+}
+
+.home-google-btn,
+.home-lichess-btn,
+.home-upload-btn,
+.home-cloud-prompt button {
+  border-radius: 7px;
+  padding: 9px 13px;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.home-google-btn {
+  border: 1px solid #cfd3dc;
+  background: #fff;
+  color: #1d1d1d;
+}
+
+.home-step-note,
+.home-step-status {
+  color: #7f8ca6;
+  font-size: 0.72rem;
+}
+
+.home-step-status-complete {
+  color: #83c995;
+}
+
+.home-import-actions {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+}
+
+.home-lichess-btn {
+  flex: 1.35;
+  border: 1px solid #d8d8d8;
+  background: #fff;
+  color: #111;
+}
+
+.home-lichess-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.home-upload-btn {
+  flex: 1;
+  border: 1px solid #4a5876;
+  background: #29334b;
+  color: #dce6fb;
+}
+
+.home-cloud-prompt {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #384969;
+  border-radius: 9px;
+  background: #202a40;
+  color: #aebbd2;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.home-cloud-prompt strong {
+  color: #dfe8f8;
+}
+
+.home-cloud-prompt button {
+  flex-shrink: 0;
+  border: 1px solid #cfd3dc;
+  background: #fff;
+  color: #1d1d1d;
+  padding: 7px 10px;
+}
+
 .home-stats-grid {
   width: 100%;
   max-width: 340px;
@@ -105,12 +258,6 @@
   opacity: 1;
 }
 
-.home-train-btn-disabled {
-  cursor: not-allowed;
-  background: #333;
-  opacity: 0.5;
-}
-
 .home-repertoire-btn {
   background: none;
   border: 1px solid #444;
@@ -119,4 +266,29 @@
   border-radius: 6px;
   padding: 7px 20px;
   font-size: 0.9rem;
+}
+
+@media (max-width: 480px) {
+  .home-root {
+    gap: 16px;
+  }
+
+  .home-header {
+    margin-top: 12px;
+  }
+
+  .home-onboarding-header,
+  .home-onboarding-step {
+    padding-left: 15px;
+    padding-right: 15px;
+  }
+
+  .home-import-actions {
+    flex-direction: column;
+  }
+
+  .home-cloud-prompt {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }

@@ -1155,8 +1155,13 @@ function App() {
             storedStudies={storedStudies}
             homeFen={homeFen}
             soundEnabled={soundEnabled}
+            lichessSyncing={lichessSyncing}
+            syncUser={syncUser}
+            syncAuthLoading={syncAuthLoading}
             onTrainNow={startGlobalTrainingSession}
             onOpenRepertoire={() => setView('repertoire')}
+            onSyncWithLichess={() => { void handleSyncWithLichess() }}
+            onSignInToSync={() => { void handleSyncSignIn() }}
           />
         ) : view === 'repertoire' ? (
           <></>

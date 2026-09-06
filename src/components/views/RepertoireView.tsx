@@ -273,7 +273,7 @@ export default function RepertoireView({
         )}
 
         {activeTab === 'repertoire' && storedStudies.length === 0 && (
-          <p className="rv-empty-note">No studies yet. Upload a PGN to get started.</p>
+          <p className="rv-empty-note">No repertoires yet. Import your Lichess studies or upload a PGN below.</p>
         )}
 
         {activeTab === 'repertoire' && <RepertoirePanel
@@ -309,7 +309,7 @@ export default function RepertoireView({
         )}
 
         <div className="rv-upload-wrap">
-          <div className="rv-upload-title">Upload study</div>
+          <div className="rv-upload-title">Add or update repertoires</div>
           <button
             type="button"
             onClick={onSyncWithLichess}
