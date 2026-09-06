@@ -128,11 +128,17 @@ export function collectChapterVariationDetails(chapter: Chapter): ChapterVariati
   return details
 }
 
-export function buildChapterTrainingLines(chapter: Chapter): { lines: TrainingLine[]; sidelineAlts: ChapterForkAlternative[] } {
+export function buildChapterTrainingLines(
+  chapter: Chapter,
+  playerColor?: 'white' | 'black',
+): { lines: TrainingLine[]; sidelineAlts: ChapterForkAlternative[] } {
   const lines: TrainingLine[] = []
   const sidelineAlts: ChapterForkAlternative[] = []
+  const playerSide = playerColor === 'white' ? 'w' : playerColor === 'black' ? 'b' : null
 
-  const forkAlternatives = collectChapterForkAlternatives(chapter)
+  const forkAlternatives = collectChapterForkAlternatives(chapter).filter(alt => (
+    playerSide === null || alt.forkFen.split(' ')[1] !== playerSide
+  ))
   for (const alt of forkAlternatives) {
     if (alt.type === 'sideline') {
       sidelineAlts.push(alt)
@@ -166,6 +172,17 @@ export function buildChapterTrainingLines(chapter: Chapter): { lines: TrainingLi
   }
 
   return { lines, sidelineAlts }
+}
+
+export function collectChapterReviewLines(
+  chapter: Chapter,
+  playerColor: 'white' | 'black',
+): Array<{ lineId: string; displaySan: string }> {
+  const { lines, sidelineAlts } = buildChapterTrainingLines(chapter, playerColor)
+  return [
+    ...lines.map(line => ({ lineId: line.lineId, displaySan: line.scoreDisplaySan })),
+    ...sidelineAlts.map(alt => ({ lineId: alt.lineId, displaySan: alt.alternative.san })),
+  ]
 }
 
 export function findScoreForLine(chapterScores: ScoreRecord[], chapterScoreId: string, lineId: string): ScoreRecord | undefined {

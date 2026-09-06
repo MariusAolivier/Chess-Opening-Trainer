@@ -29,7 +29,11 @@ interface RepertoireViewProps {
   onSetUploadColor: (color: 'white' | 'black') => void
   lichessSyncing: boolean
   lichessUsername: string | null
+  syncUser: { displayName: string | null; email: string | null } | null
+  syncAuthLoading: boolean
   onSyncWithLichess: () => void
+  onSignInToSync: () => void
+  onSignOutOfSync: () => void
   onOpenUpload: () => void
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onDismissConflicts: () => void
@@ -65,7 +69,11 @@ export default function RepertoireView({
   onSetUploadColor,
   lichessSyncing,
   lichessUsername,
+  syncUser,
+  syncAuthLoading,
   onSyncWithLichess,
+  onSignInToSync,
+  onSignOutOfSync,
   onOpenUpload,
   onFileChange,
   onDismissConflicts,
@@ -156,6 +164,25 @@ export default function RepertoireView({
               </button>
               {showSettingsPanel && (
                 <div className="rv-settings-panel">
+                  <div className="rv-sync-account">
+                    <span className="rv-setting-text">Private cloud sync</span>
+                    {syncAuthLoading ? (
+                      <span className="rv-sync-account-status">Checking account...</span>
+                    ) : syncUser ? (
+                      <>
+                        <span className="rv-sync-account-status">
+                          {syncUser.displayName ?? syncUser.email ?? 'Google account'}
+                        </span>
+                        <button type="button" onClick={onSignOutOfSync} className="rv-sync-account-btn">
+                          Sign out
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" onClick={onSignInToSync} className="rv-sync-account-btn">
+                        Sign in with Google
+                      </button>
+                    )}
+                  </div>
                   <label className="rv-sound-label">
                     <span className="rv-setting-text">Sound effects</span>
                     <button
@@ -242,7 +269,7 @@ export default function RepertoireView({
         </div>
 
         {activeTab === 'insights' && (
-          <InsightsView lichessUsername={lichessUsername} />
+          <InsightsView key={lichessUsername ?? 'disconnected'} lichessUsername={lichessUsername} />
         )}
 
         {activeTab === 'repertoire' && storedStudies.length === 0 && (

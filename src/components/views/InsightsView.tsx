@@ -117,11 +117,11 @@ export default function InsightsView({ lichessUsername }: InsightsViewProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {visible.map((stat, i) => {
+                    {visible.map(stat => {
                       const total = stat.wins + stat.draws + stat.losses
                       const wr = winRate(stat)
                       return (
-                        <tr key={i} className="iv-tr">
+                        <tr key={`${stat.eco}-${stat.opening}-${stat.color}`} className="iv-tr">
                           <td className="iv-td iv-td-opening">
                             <span className="iv-eco">{stat.eco}</span>
                             <span className="iv-opening-name">{stat.opening}</span>

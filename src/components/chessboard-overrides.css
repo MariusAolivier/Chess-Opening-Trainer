@@ -63,3 +63,35 @@
 .cg-annotation-equal {
   background: #a3a8ae;
 }
+
+.cg-promotion-picker {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(24, 24, 27, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  transform: translate(-50%, -50%);
+}
+
+.cg-promotion-option {
+  width: 48px;
+  height: 48px;
+  border: 1px solid #52525b;
+  border-radius: 8px;
+  background: #27272a;
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cg-promotion-option:hover,
+.cg-promotion-option:focus-visible {
+  border-color: #a3e635;
+  outline: none;
+}

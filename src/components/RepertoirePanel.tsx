@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { extractTrainableLines } from '../lib/pgn'
-import { loadScores, type ScoreRecord } from '../lib/scores'
+import type { ScoreRecord } from '../lib/scores'
 import { chapterId, type StoredStudy } from '../lib/storage'
 import { collectChapterVariationDetails } from '../lib/appHelpers'
+import { useCurrentTime, useScoresSnapshot } from '../hooks/useReviewData'
 import './RepertoirePanel.css'
 
 function formatDueIn(scores: ScoreRecord[], now: number): string {
@@ -78,8 +79,8 @@ export default function RepertoirePanel({
 }: RepertoirePanelProps) {
   const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set())
   const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set())
-  const scores = loadScores()
-  const now = Date.now()
+  const scores = useScoresSnapshot()
+  const now = useCurrentTime()
 
   const scoresByChapter = new Map<string, ScoreRecord[]>()
   scores.forEach(record => {
@@ -91,7 +92,8 @@ export default function RepertoirePanel({
   function toggleExpandedStudy(id: string) {
     setExpandedStudies(previous => {
       const next = new Set(previous)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }
@@ -99,7 +101,8 @@ export default function RepertoirePanel({
   function toggleExpandedChapter(cid: string) {
     setExpandedChapters(previous => {
       const next = new Set(previous)
-      next.has(cid) ? next.delete(cid) : next.add(cid)
+      if (next.has(cid)) next.delete(cid)
+      else next.add(cid)
       return next
     })
   }
@@ -143,7 +146,6 @@ export default function RepertoirePanel({
         return (
           <div key={study.id} className="rp-study-shell">
             <div
-              onClick={() => toggleExpandedStudy(study.id)}
               className={`rp-study-header ${expanded ? 'rp-study-header-expanded' : 'rp-study-header-collapsed'}`}
             >
               {selectionMode && (
@@ -152,21 +154,28 @@ export default function RepertoirePanel({
                   ref={node => { if (node) node.indeterminate = studySomeSelected }}
                   checked={studyAllSelected}
                   onChange={() => onToggleStudy(study)}
-                  onClick={event => event.stopPropagation()}
                   className="rp-study-checkbox"
+                  aria-label={`Select all chapters in ${study.name}`}
                 />
               )}
-              <span className="rp-expand-icon">{expanded ? '▼' : '▶'}</span>
-              <span className="rp-study-name">{study.name}</span>
-              {dueLines > 0 && (
-                <span className="rp-due-badge">
-                  {dueLines} due
-                </span>
-              )}
-              <span className="rp-percent">{progressPercent}%</span>
+              <button
+                type="button"
+                onClick={() => toggleExpandedStudy(study.id)}
+                className="rp-study-toggle"
+                aria-expanded={expanded}
+              >
+                <span className="rp-expand-icon">{expanded ? '▼' : '▶'}</span>
+                <span className="rp-study-name">{study.name}</span>
+                {dueLines > 0 && (
+                  <span className="rp-due-badge">
+                    {dueLines} due
+                  </span>
+                )}
+                <span className="rp-percent">{progressPercent}%</span>
+              </button>
               {!selectionMode && (
                 <button
-                  onClick={event => { event.stopPropagation(); onDeleteStudy(study.id) }}
+                  onClick={() => onDeleteStudy(study.id)}
                   title="Delete study"
                   className="rp-trash-btn"
                 >
@@ -214,7 +223,6 @@ export default function RepertoirePanel({
                   return (
                     <div key={chapterIndex} className="rp-chapter-shell">
                       <div
-                        onClick={() => selectionMode ? onToggleChapter(cid) : toggleExpandedChapter(cid)}
                         className={`rp-chapter-row ${selectionMode && chapterSelected ? 'rp-chapter-row-selected' : ''}`}
                       >
                         {selectionMode && (
@@ -222,44 +230,43 @@ export default function RepertoirePanel({
                             type="checkbox"
                             checked={chapterSelected}
                             onChange={() => onToggleChapter(cid)}
-                            onClick={event => event.stopPropagation()}
                             className="rp-chapter-checkbox"
+                            aria-label={`Select ${chapter.title}`}
                           />
                         )}
-                        {!selectionMode && (
-                          <button
-                            type="button"
-                            onClick={event => {
-                              event.stopPropagation()
-                              toggleExpandedChapter(cid)
-                            }}
-                            className="rp-chapter-expand-btn"
-                            aria-label={chapterExpanded ? 'Collapse chapter' : 'Expand chapter'}
-                          >
-                            {chapterExpanded ? '▼' : '▶'}
-                          </button>
-                        )}
-                        <span className="rp-chapter-labels">
-                          <span className="rp-chapter-title">{chapter.title}</span>
-                          <span className="rp-chapter-last-reviewed">{chapterDueIn}</span>
-                        </span>
-                        {chapterDue > 0 && (
-                          <span className="rp-chapter-due">
-                            {chapterDue} due
+                        <button
+                          type="button"
+                          onClick={() => selectionMode ? onToggleChapter(cid) : toggleExpandedChapter(cid)}
+                          className="rp-chapter-toggle"
+                          aria-expanded={selectionMode ? undefined : chapterExpanded}
+                        >
+                          {!selectionMode && (
+                            <span className="rp-chapter-expand-btn" aria-hidden="true">
+                              {chapterExpanded ? '▼' : '▶'}
+                            </span>
+                          )}
+                          <span className="rp-chapter-labels">
+                            <span className="rp-chapter-title">{chapter.title}</span>
+                            <span className="rp-chapter-last-reviewed">{chapterDueIn}</span>
                           </span>
-                        )}
-                        <span className="rp-chapter-percent">{chapterPercent}%</span>
+                          {chapterDue > 0 && (
+                            <span className="rp-chapter-due">
+                              {chapterDue} due
+                            </span>
+                          )}
+                          <span className="rp-chapter-percent">{chapterPercent}%</span>
+                        </button>
                         {!selectionMode && (
                           <>
                             <button
                               type="button"
-                              onClick={event => { event.stopPropagation(); onTrainChapter(study, chapterIndex) }}
+                              onClick={() => onTrainChapter(study, chapterIndex)}
                               className="rp-chapter-train-btn"
                             >
                               Train
                             </button>
                             <button
-                              onClick={event => { event.stopPropagation(); onDeleteChapter(study.id, chapterIndex) }}
+                              onClick={() => onDeleteChapter(study.id, chapterIndex)}
                               title="Delete chapter"
                               className="rp-trash-btn"
                             >

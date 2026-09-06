@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { Chess } from 'chess.js'
 import './App.css'
 import ConfirmDialog, { type ConfirmDialogState } from './components/ConfirmDialog'
@@ -6,9 +6,10 @@ import StreakAnimation from './components/StreakAnimation'
 import HomeView from './components/views/HomeView'
 import RepertoireView from './components/views/RepertoireView'
 import TrainingView from './components/views/TrainingView'
-import { parseStudyWithWarnings, parseStudiesWithWarnings, type Chapter, extractForkMoves, extractLines } from './lib/pgn'
+import { parseStudyWithWarnings, parseStudiesWithWarnings, type Chapter, extractForkMoves } from './lib/pgn'
 import {
   loadStudies,
+  clearStudies,
   saveStudy,
   deleteStudy,
   deleteChapter,
@@ -29,9 +30,10 @@ import {
   loadScores,
   recordReview,
   initScore,
-  importAllScores,
-  importForkMainlines,
-  importReviewActivity,
+  clearScores,
+  clearForkMainlines,
+  clearReviewActivity,
+  loadReviewActivity,
   pruneStudyChapterIds,
   remapChapterIds,
   syncChapterLines,
@@ -40,22 +42,24 @@ import {
   type ConflictInfo,
   type ScoreRecord,
   getReviewStreak,
+  calculateReviewStreak,
+  reviewDayKey,
 } from './lib/scores'
 import {
   uploadStudy,
   deleteStudyRemote,
+  uploadScore,
   uploadScores,
   uploadForkMainlines,
   uploadReviewActivity,
+  incrementRemoteReviewActivity,
 } from './lib/sync'
 import {
   HOME_FENS,
   STARTING_FEN,
   findQuizStartMoveIndex,
-  flattenLine,
   type FlatMove,
   type TrainingLine,
-  type SidelineAttachment,
 } from './lib/training'
 import {
   exportLichessStudiesPgn,
@@ -65,29 +69,45 @@ import {
   STREAK_SHOWN_KEY,
   VARIATION_COMPLETE_DELAY_MS,
   buildChapterTrainingLines,
+  collectChapterReviewLines,
   buildParseWarningMessage,
   collectChapterVariationDetails,
   chapterConflictMap,
   colorFromLichessStudyName,
-  findScoreForLine,
   pickNextChapterForTraining,
   todayDayKey,
 } from './lib/appHelpers'
 import { useInitialSync } from './hooks/useInitialSync'
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation'
 import { useLichessSync } from './hooks/useLichessSync'
-
-type GlobalEntry = { line: TrainingLine; chapter: Chapter; study: StoredStudy; cid: string }
+import { useCurrentTime, useReviewActivitySnapshot, useScoresSnapshot } from './hooks/useReviewData'
+import {
+  signInToSync,
+  signOutOfSync,
+  subscribeToSyncUser,
+  getLocalSyncOwner,
+  clearLocalSyncOwner,
+  type SyncUser,
+} from './lib/auth'
+import {
+  buildChapterTrainingQueue,
+  buildGlobalTrainingQueue,
+  linePriorityInfo as getLinePriorityInfo,
+  type GlobalTrainingEntry,
+  type LinePriority,
+} from './lib/trainingQueue'
 
 function App() {
   const MAX_QUEUE_SIZE = 10
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const wrongCountRef = useRef(0)
+  const retryWrongCountRef = useRef(0)
   const trainingQueueRef = useRef<TrainingLine[]>([])
-  const globalQueueRef = useRef<GlobalEntry[]>([])
+  const globalQueueRef = useRef<GlobalTrainingEntry[]>([])
   const isGlobalSessionRef = useRef(false)
   const globalSessionDoneRef = useRef(false)
+  const reconciledSyncKeyRef = useRef('')
 
   const [view, setView] = useState<'home' | 'repertoire' | 'training'>('home')
   const [storedStudies, setStoredStudies] = useState<StoredStudy[]>(() => loadStudies())
@@ -114,7 +134,6 @@ function App() {
   const [selectedChapterIds, setSelectedChapterIds] = useState<Set<string>>(new Set())
   const [trainingQueue, setTrainingQueue] = useState<TrainingLine[]>([])
 
-  const [statsKey, setStatsKey] = useState(0)
   const [selectedRunPriority, setSelectedRunPriority] = useState<0 | 1 | 2 | null>(null)
   const [uploadColor, setUploadColor] = useState<'white' | 'black'>('white')
   const [activePlayerColor, setActivePlayerColor] = useState<'white' | 'black'>('white')
@@ -128,6 +147,11 @@ function App() {
   const [homeFen] = useState(() => HOME_FENS[Math.floor(Math.random() * HOME_FENS.length)] ?? STARTING_FEN)
   const [showStreakAnimation, setShowStreakAnimation] = useState<number | null>(null)
   const [lichessUsername, setLichessUsername] = useState<string | null>(null)
+  const [syncUser, setSyncUser] = useState<SyncUser | null>(null)
+  const [syncAuthLoading, setSyncAuthLoading] = useState(true)
+  const scoreSnapshot = useScoresSnapshot()
+  const reviewActivitySnapshot = useReviewActivitySnapshot()
+  const currentTime = useCurrentTime()
 
   function resetTrainingProgress() {
     setActiveLine(null)
@@ -140,13 +164,25 @@ function App() {
     setParentLineState(null)
     setIsSideline(false)
     wrongCountRef.current = 0
+    retryWrongCountRef.current = 0
     trainingQueueRef.current = []
     setTrainingQueue([])
   }
 
-  async function persistReviewData() {
+  async function persistReviewData(record: ScoreRecord) {
+    if (!syncUser) return
+
     try {
-      await Promise.all([uploadScores(), uploadReviewActivity()])
+      const activityDay = reviewDayKey()
+      const localActivity = loadReviewActivity().find(activity => activity.day === activityDay)
+      await Promise.all([
+        uploadScore(syncUser.uid, record),
+        incrementRemoteReviewActivity(syncUser.uid, localActivity ?? {
+          day: activityDay,
+          count: 1,
+          updatedAt: new Date().toISOString(),
+        }),
+      ])
       setSyncStatus('ok')
       setSyncError(null)
     } catch (err: unknown) {
@@ -155,7 +191,6 @@ function App() {
       setSyncStatus('error')
       setSyncError(message)
     }
-    setStatsKey(key => key + 1)
   }
 
   const migrateLegacyChapterIdsForStudies = useCallback((studiesToMigrate: StoredStudy[]): boolean => {
@@ -176,22 +211,19 @@ function App() {
     const chapterIndex = chapters.indexOf(selectedChapter)
     if (chapterIndex < 0) return
 
-    const wrongs = wrongCountRef.current
-    const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 99 ? 1 : wrongs <= 1 ? 5 : wrongs === 2 ? 4 : 3
-    recordReview(chapterId(selectedStudyId, chapters, chapterIndex), activeLine.lineId, activeLine.scoreDisplaySan, quality, spacedRepetitionIntensity)
-    void persistReviewData()
+    const wrongs = Math.max(wrongCountRef.current, retryWrongCountRef.current)
+    const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 2 : wrongs === 2 ? 1 : 0
+    const record = recordReview(
+      chapterId(selectedStudyId, chapters, chapterIndex),
+      activeLine.lineId,
+      activeLine.scoreDisplaySan,
+      quality,
+      spacedRepetitionIntensity,
+    )
+    retryWrongCountRef.current = 0
+    void persistReviewData(record)
   }
-
-  function lineSortKey(lineId: string, cid: string, scores: ScoreRecord[]): { priority: number; dueAt: number } {
-    const score = findScoreForLine(scores, cid, lineId)
-    if (!score || !score.lastReviewedAt || score.interval <= 0) {
-      return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-    }
-    const dueAt = Date.parse(score.dueDate)
-    if (Number.isNaN(dueAt)) return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-    if (dueAt <= Date.now()) return { priority: 1, dueAt }
-    return { priority: 2, dueAt }
-  }
+  const recordLineReviewEvent = useEffectEvent(recordLineReview)
 
   function maybeFireDailyChapterStreakAnimation() {
     const today = todayDayKey()
@@ -231,6 +263,40 @@ function App() {
     })
   }
 
+  async function handleSyncSignIn() {
+    setSyncAuthLoading(true)
+    setSyncError(null)
+    try {
+      await signInToSync()
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setSyncStatus('error')
+      setSyncError(message)
+    } finally {
+      setSyncAuthLoading(false)
+    }
+  }
+
+  async function handleSyncSignOut() {
+    setSyncAuthLoading(true)
+    try {
+      await signOutOfSync()
+      clearStudies()
+      clearScores()
+      clearForkMainlines()
+      clearReviewActivity()
+      setStoredStudies([])
+      setSyncStatus('idle')
+      setSyncError(null)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      setSyncStatus('error')
+      setSyncError(message)
+    } finally {
+      setSyncAuthLoading(false)
+    }
+  }
+
   function loadChapters(chaptersToLoad: Chapter[], playerColor: 'white' | 'black' = 'white', studyId?: string) {
     setChapters(chaptersToLoad)
     setSelectedChapter(chaptersToLoad[0] ?? null)
@@ -249,156 +315,24 @@ function App() {
     resetTrainingProgress()
   }
   function startGlobalTrainingSession(chapterIdFilter?: Set<string>) {
-    const scores = loadScores()
-    const now = Date.now()
-    const entries: GlobalEntry[] = []
-    const promotedSidelineLineIds = new Set<string>()
-
     storedStudies.forEach(study => {
       study.chapters.forEach((chapter, chapterIndex) => {
         const cid = chapterId(study.id, study.chapters, chapterIndex)
         if (chapterIdFilter && chapterIdFilter.size > 0 && !chapterIdFilter.has(cid)) return
-        const chapterLines = extractLines(chapter, study.playerColor)
-        const { lines: allLines, sidelineAlts } = buildChapterTrainingLines(chapter)
-        const validLineIds = new Set([
-          ...chapterLines.map(l => l.lineId),
-          ...sidelineAlts.map(alt => alt.lineId),
-        ])
+        const chapterLines = collectChapterReviewLines(chapter, study.playerColor)
+        const validLineIds = new Set(chapterLines.map(line => line.lineId))
         syncChapterLines(cid, validLineIds)
-        chapterLines.forEach(l => initScore(cid, l.lineId, l.displaySan))
-        const chapterScores = scores.filter(s => s.chapterId === cid)
-
-        // Collect due main lines for this chapter
-        const dueLines: TrainingLine[] = []
-        for (const trainingLine of allLines) {
-          const score = findScoreForLine(chapterScores, cid, trainingLine.lineId)
-          const dueAt = score ? Date.parse(score.dueDate) : Number.NaN
-          const isDue =
-            !score ||
-            !score.lastReviewedAt ||
-            score.interval <= 0 ||
-            (!Number.isNaN(dueAt) && dueAt <= now)
-          if (isDue) {
-            dueLines.push({ ...trainingLine, chapterTitle: chapter.title })
-          }
-        }
-
-        // Attach due sidelines to their parent lines (mirrors per-chapter queue-build effect)
-        if (sidelineAlts.length > 0) {
-          const dueSidelines = sidelineAlts.filter(alt => {
-            const score = findScoreForLine(chapterScores, cid, alt.lineId)
-            if (!score || !score.lastReviewedAt || score.interval <= 0) return true
-            const dueAt = Date.parse(score.dueDate)
-            return !Number.isNaN(dueAt) && dueAt <= now
-          })
-
-          for (const alt of dueSidelines) {
-            const forkMoveIndex = alt.pathFromStart.length
-            const parent = dueLines.find(line => {
-              if (line.line.length <= forkMoveIndex) return false
-              const fenAtFork = forkMoveIndex === 0
-                ? chapter.startFen
-                : line.line[forkMoveIndex - 1]?.fen
-              return fenAtFork === alt.forkFen
-            })
-            if (!parent) {
-              // Sideline is due but its parent line isn't — queue it as a standalone line
-              promotedSidelineLineIds.add(alt.lineId)
-              const sidelineMoves = flattenLine(alt.alternative)
-              dueLines.push({
-                line: [...alt.pathFromStart, ...sidelineMoves],
-                lineId: alt.lineId,
-                label: alt.branchLabel,
-                scoreDisplaySan: alt.alternative.san,
-                chapterTitle: chapter.title,
-              })
-              continue
-            }
-
-            const sidelineMoves = flattenLine(alt.alternative)
-            const attachment: SidelineAttachment = {
-              forkMoveIndex,
-              sidelineLine: {
-                line: sidelineMoves,
-                lineId: alt.lineId,
-                label: alt.branchLabel,
-                scoreDisplaySan: alt.alternative.san,
-              },
-            }
-            if (!parent.sidelines) parent.sidelines = []
-            parent.sidelines.push(attachment)
-          }
-
-          for (const line of dueLines) {
-            if (line.sidelines) {
-              line.sidelines.sort((a, b) => a.forkMoveIndex - b.forkMoveIndex)
-            }
-          }
-        }
-
-        for (const line of dueLines) {
-          entries.push({ line, chapter, study, cid })
-        }
+        chapterLines.forEach(line => initScore(cid, line.lineId, line.displaySan))
       })
     })
 
-    // Fallback: if nothing is due, queue all lines — new/unreviewed first, then by next due date
-    if (entries.length === 0) {
-      storedStudies.forEach(study => {
-        study.chapters.forEach((chapter, chapterIndex) => {
-          const cid = chapterId(study.id, study.chapters, chapterIndex)
-          if (chapterIdFilter && chapterIdFilter.size > 0 && !chapterIdFilter.has(cid)) return
-          const { lines: allLines, sidelineAlts } = buildChapterTrainingLines(chapter)
-          const notDueLines: TrainingLine[] = allLines.map(l => ({ ...l, chapterTitle: chapter.title }))
-
-          if (sidelineAlts.length > 0) {
-            for (const alt of sidelineAlts) {
-              const forkMoveIndex = alt.pathFromStart.length
-              const parent = notDueLines.find(line => {
-                if (line.line.length <= forkMoveIndex) return false
-                const fenAtFork = forkMoveIndex === 0
-                  ? chapter.startFen
-                  : line.line[forkMoveIndex - 1]?.fen
-                return fenAtFork === alt.forkFen
-              })
-              if (!parent) continue
-
-              const sidelineMoves = flattenLine(alt.alternative)
-              const attachment: SidelineAttachment = {
-                forkMoveIndex,
-                sidelineLine: {
-                  line: sidelineMoves,
-                  lineId: alt.lineId,
-                  label: alt.branchLabel,
-                  scoreDisplaySan: alt.alternative.san,
-                },
-              }
-              if (!parent.sidelines) parent.sidelines = []
-              parent.sidelines.push(attachment)
-            }
-            for (const line of notDueLines) {
-              if (line.sidelines) line.sidelines.sort((a, b) => a.forkMoveIndex - b.forkMoveIndex)
-            }
-          }
-
-          for (const line of notDueLines) {
-            entries.push({ line, chapter, study, cid })
-          }
-        })
-      })
-    }
-
+    const entries = buildGlobalTrainingQueue(
+      storedStudies,
+      chapterIdFilter,
+      loadScores(),
+      Date.now(),
+    )
     if (entries.length === 0) return
-
-    entries.sort((a, b) => {
-      const aKey = lineSortKey(a.line.lineId, a.cid, scores)
-      const bKey = lineSortKey(b.line.lineId, b.cid, scores)
-      if (aKey.priority !== bKey.priority) return aKey.priority - bKey.priority
-      const aPromoted = promotedSidelineLineIds.has(a.line.lineId) ? 1 : 0
-      const bPromoted = promotedSidelineLineIds.has(b.line.lineId) ? 1 : 0
-      if (aPromoted !== bPromoted) return aPromoted - bPromoted
-      return aKey.dueAt - bKey.dueAt
-    })
 
     isGlobalSessionRef.current = true
     globalSessionDoneRef.current = false
@@ -424,19 +358,69 @@ function App() {
     const queueLines = rest.map(e => e.line).slice(0, MAX_QUEUE_SIZE)
     trainingQueueRef.current = queueLines
     setTrainingQueue(queueLines)
-    setStatsKey(k => k + 1)
     setQuizMode(true)
     setBoardResetKey(k => k + 1)
     setView('training')
   }
 
+  useEffect(() => subscribeToSyncUser(
+    user => {
+      if (!user && getLocalSyncOwner()) {
+        clearStudies()
+        clearScores()
+        clearForkMainlines()
+        clearReviewActivity()
+        clearLocalSyncOwner()
+        setStoredStudies([])
+      }
+      setSyncUser(user)
+      setSyncAuthLoading(false)
+    },
+    authError => {
+      setSyncAuthLoading(false)
+      setSyncStatus('error')
+      setSyncError(authError.message)
+    },
+  ), [])
+
   useInitialSync({
+    userId: syncUser?.uid ?? null,
     setSyncStatus,
     setSyncError,
     setStoredStudies,
-    setStatsKey,
     migrateLegacyChapterIdsForStudies,
   })
+
+  useEffect(() => {
+    if (!syncUser || syncStatus !== 'ok') return
+    const syncKey = `${syncUser.uid}:${storedStudies
+      .map(study => `${study.id}:${study.updatedAt ?? ''}`)
+      .sort()
+      .join('|')}`
+    if (reconciledSyncKeyRef.current === syncKey) return
+    reconciledSyncKeyRef.current = syncKey
+
+    storedStudies.forEach(study => {
+      study.chapters.forEach((chapter, chapterIndex) => {
+        const cid = chapterId(study.id, study.chapters, chapterIndex)
+        const validLines = collectChapterReviewLines(chapter, study.playerColor)
+        syncChapterLines(cid, new Set(validLines.map(line => line.lineId)))
+        updateForkMainlines(cid, extractForkMoves(chapter, study.playerColor))
+      })
+      pruneStudyChapterIds(study.id, new Set(buildChapterIds(study.id, study.chapters)))
+    })
+
+    void Promise.all([
+      uploadScores(syncUser.uid, true),
+      uploadForkMainlines(syncUser.uid, true),
+    ]).catch((err: unknown) => {
+      reconciledSyncKeyRef.current = ''
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[sync] structural reconciliation failed:', err)
+      setSyncStatus('error')
+      setSyncError(message)
+    })
+  }, [storedStudies, syncStatus, syncUser])
 
   const userColor = useMemo(() => (activePlayerColor === 'white' ? 'w' : 'b'), [activePlayerColor])
 
@@ -493,19 +477,9 @@ function App() {
   }, [selectedChapterIds, storedStudies])
 
   const queuePreviewItems = useMemo(() => {
-    const scores = loadScores()
-    const now = Date.now()
+    const scores = scoreSnapshot
+    const now = currentTime
     const priorityOrder: Array<0 | 1 | 2> = [0, 1, 2]
-
-    function linePriorityInfo(cid: string, lineId: string): { priority: 0 | 1 | 2; dueAt: number } {
-      const score = findScoreForLine(scores, cid, lineId)
-      if (!score || !score.lastReviewedAt || score.interval <= 0) {
-        return { priority: 0, dueAt: Number.NEGATIVE_INFINITY }
-      }
-      const dueAt = Date.parse(score.dueDate)
-      if (!Number.isNaN(dueAt) && dueAt <= now) return { priority: 1, dueAt }
-      return { priority: 2, dueAt: Number.POSITIVE_INFINITY }
-    }
 
     const baseItems = trainingQueue.slice(0, MAX_QUEUE_SIZE).map(item => ({
       label: item.label,
@@ -520,7 +494,7 @@ function App() {
     if (selectedChapterVariations.length <= 0) return baseItems
 
     const projected = selectedChapterVariations.map(entry => {
-      const priorityInfo = linePriorityInfo(entry.cid, entry.lineId)
+      const priorityInfo = getLinePriorityInfo(entry.lineId, entry.cid, scores, now)
       return {
         label: entry.label,
         chapterTitle: entry.chapterTitle,
@@ -550,16 +524,17 @@ function App() {
       chapterTitle: item.chapterTitle,
       sidelineCount: 0,
     }))
-  }, [trainingQueue, selectedChapterIds, selectedChapterVariations, statsKey, selectedChapter])
+  }, [trainingQueue, selectedChapterIds, selectedChapterVariations, selectedChapter, scoreSnapshot, currentTime])
 
   const totalDue = useMemo(() => {
-    const scores = loadScores()
-    const now = Date.now()
-    return scores.filter(score => new Date(score.dueDate).getTime() <= now).length
-  }, [statsKey, storedStudies])
+    return scoreSnapshot.filter(score => new Date(score.dueDate).getTime() <= currentTime).length
+  }, [scoreSnapshot, currentTime])
 
   const estimatedMinutes = useMemo(() => Math.ceil((totalDue * 45) / 60), [totalDue])
-  const streak = useMemo(() => getReviewStreak(), [statsKey])
+  const streak = useMemo(
+    () => calculateReviewStreak(reviewActivitySnapshot, currentTime),
+    [reviewActivitySnapshot, currentTime],
+  )
 
   useEffect(() => {
     if (isGlobalSessionRef.current) return
@@ -571,8 +546,6 @@ function App() {
     if (!quizMode || !selectedChapter) return
     if (isGlobalSessionRef.current) return
 
-    const { lines: allLines, sidelineAlts } = buildChapterTrainingLines(selectedChapter)
-
     const chapterIndex = chapters.indexOf(selectedChapter)
     const cid = selectedStudyId && chapterIndex >= 0
       ? chapterId(selectedStudyId, chapters, chapterIndex)
@@ -580,7 +553,7 @@ function App() {
 
     const allScores = loadScores()
 
-    const allowedPriorities: number[] = selectedRunPriority === null
+    const allowedPriorities: LinePriority[] = selectedRunPriority === null
       ? [0, 1, 2]
       : selectedRunPriority === 0
         ? [0]
@@ -588,93 +561,16 @@ function App() {
           ? [1]
           : [2]
 
-    const filtered = (() => {
-      if (!cid) return allLines
-
-      const withPriority = allLines.map(line => ({
-        line,
-        sortKey: lineSortKey(line.lineId, cid, allScores),
-      }))
-
-      return allowedPriorities.flatMap(p =>
-        withPriority
-          .filter(entry => entry.sortKey.priority === p)
-          .map(entry => entry.line)
-      )
-    })()
-
-    // Attach due sidelines to parent lines
-    if (cid && sidelineAlts.length > 0) {
-      const now = Date.now()
-
-      const dueSidelines = sidelineAlts.filter(alt => {
-        const score = findScoreForLine(allScores, cid, alt.lineId)
-        if (!score || !score.lastReviewedAt || score.interval <= 0) return true
-        const dueAt = Date.parse(score.dueDate)
-        return !Number.isNaN(dueAt) && dueAt <= now
-      })
-
-      const promotedSidelineIds = new Set<string>()
-
-      for (const alt of dueSidelines) {
-        const forkMoveIndex = alt.pathFromStart.length
-        const parent = filtered.find(line => {
-          if (line.line.length <= forkMoveIndex) return false
-          // The FEN before the fork move must match the sideline's fork FEN
-          const fenAtFork = forkMoveIndex === 0
-            ? selectedChapter.startFen
-            : line.line[forkMoveIndex - 1]?.fen
-          return fenAtFork === alt.forkFen
-        })
-        if (!parent) {
-          // Sideline is due but its parent line isn't — queue it as a standalone line
-          const sidelineKey = lineSortKey(alt.lineId, cid, allScores)
-          if (!allowedPriorities.includes(sidelineKey.priority)) continue
-          promotedSidelineIds.add(alt.lineId)
-          const sidelineMoves = flattenLine(alt.alternative)
-          filtered.push({
-            line: [...alt.pathFromStart, ...sidelineMoves],
-            lineId: alt.lineId,
-            label: alt.branchLabel,
-            scoreDisplaySan: alt.alternative.san,
-          })
-          continue
-        }
-
-        const sidelineMoves = flattenLine(alt.alternative)
-        const attachment: SidelineAttachment = {
-          forkMoveIndex,
-          sidelineLine: {
-            line: sidelineMoves,
-            lineId: alt.lineId,
-            label: alt.branchLabel,
-            scoreDisplaySan: alt.alternative.san,
-          },
-        }
-
-        if (!parent.sidelines) parent.sidelines = []
-        parent.sidelines.push(attachment)
-      }
-
-      // Sort sidelines on each parent by forkMoveIndex ascending
-      for (const line of filtered) {
-        if (line.sidelines) {
-          line.sidelines.sort((a, b) => a.forkMoveIndex - b.forkMoveIndex)
-        }
-      }
-
-      // Re-sort filtered: within each priority class, promoted sidelines go last
-      if (promotedSidelineIds.size > 0) {
-        filtered.sort((a, b) => {
-          const aKey = lineSortKey(a.lineId, cid, allScores)
-          const bKey = lineSortKey(b.lineId, cid, allScores)
-          if (aKey.priority !== bKey.priority) return aKey.priority - bKey.priority
-          const aPromoted = promotedSidelineIds.has(a.lineId) ? 1 : 0
-          const bPromoted = promotedSidelineIds.has(b.lineId) ? 1 : 0
-          return aPromoted - bPromoted
-        })
-      }
-    }
+    const filtered = cid
+      ? buildChapterTrainingQueue(
+          selectedChapter,
+          cid,
+          allScores,
+          allowedPriorities,
+          Date.now(),
+          activePlayerColor,
+        ).map(item => item.line)
+      : buildChapterTrainingLines(selectedChapter, activePlayerColor).lines
 
     if (filtered.length === 0) {
       setQuizDone(true)
@@ -683,20 +579,67 @@ function App() {
 
     const [first, ...rest] = filtered
     setActiveLine(first)
-    trainingQueueRef.current = rest.slice(0, MAX_QUEUE_SIZE)
+    trainingQueueRef.current = rest
     setTrainingQueue(rest.slice(0, MAX_QUEUE_SIZE))
     wrongCountRef.current = 0
     setParentLineState(null)
     setIsSideline(false)
     setMoveIndex(findQuizStartMoveIndex(selectedChapter, first.line, userColor, undefined, first.label))
     setBoardResetKey(key => key + 1)
-  }, [quizMode, selectedChapter, selectedStudyId, selectedRunPriority, userColor, trainingSessionKey])
+  }, [quizMode, selectedChapter, selectedStudyId, selectedRunPriority, userColor, trainingSessionKey, chapters, activePlayerColor])
 
   useKeyboardNavigation({
     quizMode,
     maxMoveIndex: mainline.length - 1,
     setMoveIndex,
   })
+
+  const advanceToNextTrainingLine = useCallback(() => {
+    if (isGlobalSessionRef.current) {
+      const nextEntry = globalQueueRef.current[0]
+      if (!nextEntry) {
+        isGlobalSessionRef.current = false
+        globalSessionDoneRef.current = true
+        setQuizDone(true)
+        return
+      }
+
+      globalQueueRef.current = globalQueueRef.current.slice(1)
+      const queueLines = globalQueueRef.current.map(entry => entry.line).slice(0, MAX_QUEUE_SIZE)
+      trainingQueueRef.current = queueLines
+      setTrainingQueue(queueLines)
+      if (nextEntry.chapter !== selectedChapter) {
+        setSelectedChapter(nextEntry.chapter)
+        setSelectedStudyId(nextEntry.study.id)
+        setChapters(nextEntry.study.chapters)
+        setActivePlayerColor(nextEntry.study.playerColor)
+      }
+      const nextUserColor = nextEntry.study.playerColor === 'white' ? 'w' : 'b'
+      setActiveLine(nextEntry.line)
+      setMoveIndex(findQuizStartMoveIndex(
+        nextEntry.chapter,
+        nextEntry.line.line,
+        nextUserColor,
+        undefined,
+        nextEntry.line.label,
+      ))
+      setBoardResetKey(key => key + 1)
+      return
+    }
+
+    const next = trainingQueueRef.current[0]
+    if (!next) {
+      setQuizDone(true)
+      return
+    }
+    trainingQueueRef.current = trainingQueueRef.current.slice(1)
+    setTrainingQueue(trainingQueueRef.current.slice(0, MAX_QUEUE_SIZE))
+    setActiveLine(next)
+    if (selectedChapter) {
+      setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor, undefined, next.label))
+    }
+    setBoardResetKey(key => key + 1)
+  }, [selectedChapter, userColor])
 
   // The effective start FEN for the current active line
   const activeStartFen = isSideline && parentLineState
@@ -740,9 +683,8 @@ function App() {
 
     // Current line complete?
     if (nextIndex >= line.length) {
-      recordLineReview()
-
-      if (repeatFailedVariationsEnabled && wrongCountRef.current > 0) {
+      if (repeatFailedVariationsEnabled && wrongCountRef.current > 0 && !isRetryingVariation) {
+        retryWrongCountRef.current = wrongCountRef.current
         const timeout = setTimeout(() => {
           setQuizWrong(null)
           setRevealedAnswer(false)
@@ -753,6 +695,8 @@ function App() {
         }, VARIATION_COMPLETE_DELAY_MS)
         return () => clearTimeout(timeout)
       }
+
+      recordLineReviewEvent()
 
       // If this was a sideline, return to parent
       if (parentLineState) {
@@ -776,40 +720,7 @@ function App() {
         setIsRetryingVariation(false)
         wrongCountRef.current = 0
 
-        if (isGlobalSessionRef.current) {
-          const nextEntry = globalQueueRef.current[0]
-          if (!nextEntry) {
-            isGlobalSessionRef.current = false
-            globalSessionDoneRef.current = true
-            setQuizDone(true)
-            return
-          }
-          globalQueueRef.current = globalQueueRef.current.slice(1)
-          const queueLines = globalQueueRef.current.map(e => e.line).slice(0, MAX_QUEUE_SIZE)
-          trainingQueueRef.current = queueLines
-          setTrainingQueue(queueLines)
-          if (nextEntry.chapter !== selectedChapter) {
-            setSelectedChapter(nextEntry.chapter)
-            setSelectedStudyId(nextEntry.study.id)
-            setChapters(nextEntry.study.chapters)
-            setActivePlayerColor(nextEntry.study.playerColor)
-          }
-          const nextUserColor = nextEntry.study.playerColor === 'white' ? 'w' : 'b'
-          setActiveLine(nextEntry.line)
-          setMoveIndex(findQuizStartMoveIndex(nextEntry.chapter, nextEntry.line.line, nextUserColor, undefined, nextEntry.line.label))
-          setBoardResetKey(key => key + 1)
-          return
-        }
-        const next = trainingQueueRef.current[0]
-        if (!next) {
-          setQuizDone(true)
-          return
-        }
-        trainingQueueRef.current = trainingQueueRef.current.slice(1)
-        setTrainingQueue(trainingQueueRef.current)
-        setActiveLine(next)
-        setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor, undefined, next.label))
-        setBoardResetKey(key => key + 1)
+        advanceToNextTrainingLine()
       }, VARIATION_COMPLETE_DELAY_MS)
       return () => clearTimeout(timeout)
     }
@@ -823,18 +734,7 @@ function App() {
       }, 700)
       return () => clearTimeout(timeout)
     }
-  }, [quizMode, moveIndex, selectedChapter, userColor, quizDone, activeLine, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity, isRetryingVariation, isSideline, parentLineState, activeStartFen])
-
-  useEffect(() => {
-    if (!quizDone) return
-    maybeFireDailyChapterStreakAnimation()
-    if (globalSessionDoneRef.current) {
-      globalSessionDoneRef.current = false
-      return
-    }
-    const timeout = setTimeout(() => pickAndTrainNext(), 500)
-    return () => clearTimeout(timeout)
-  }, [quizDone])
+  }, [quizMode, moveIndex, selectedChapter, userColor, quizDone, activeLine, selectedStudyId, chapters, repeatFailedVariationsEnabled, spacedRepetitionIntensity, isRetryingVariation, isSideline, parentLineState, activeStartFen, advanceToNextTrainingLine])
 
   const currentFen = activeLine && quizMode
     ? (moveIndex === -1 ? activeStartFen : activeLine.line[moveIndex]?.fen)
@@ -857,20 +757,27 @@ function App() {
           setError(warningMessage)
         }
 
-        Promise.all([uploadStudy(imported.stored), uploadScores(), uploadForkMainlines()])
-          .then(() => {
-            setSyncStatus('ok')
-            setSyncError(null)
-          })
-          .catch((err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err)
-            console.error('[sync] upload failed after PGN import:', err)
-            setSyncStatus('error')
-            setSyncError(message)
-          })
+        if (syncUser) {
+          Promise.all([
+            uploadStudy(syncUser.uid, imported.stored),
+            uploadScores(syncUser.uid, false),
+            uploadForkMainlines(syncUser.uid, false),
+          ])
+            .then(() => {
+              setSyncStatus('ok')
+              setSyncError(null)
+            })
+            .catch((err: unknown) => {
+              const message = err instanceof Error ? err.message : String(err)
+              console.error('[sync] upload failed after PGN import:', err)
+              setSyncStatus('error')
+              setSyncError(message)
+            })
+        }
         loadChapters(imported.stored.chapters, uploadColor, imported.stored.id)
-      } catch {
-        setError('Failed to parse PGN file.')
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err)
+        setError(`Failed to parse PGN file: ${message}`)
       }
     }
 
@@ -885,7 +792,7 @@ function App() {
     pruneStudyChapterIds(stored.id, new Set(buildChapterIds(stored.id, stored.chapters)))
     stored.chapters.forEach((chapter, chapterIndex) => {
       const cid = chapterId(stored.id, stored.chapters, chapterIndex)
-      const lines = extractLines(chapter, stored.playerColor)
+      const lines = collectChapterReviewLines(chapter, stored.playerColor)
       syncChapterLines(cid, new Set(lines.map(line => line.lineId)))
       updateForkMainlines(cid, extractForkMoves(chapter, stored.playerColor))
     })
@@ -906,10 +813,6 @@ function App() {
     const parsedStudies = parsed.studies
     const studiesToSync = parsedStudies
       .filter(study => !study.name.startsWith('/'))
-      .map(study => ({
-        ...study,
-        chapters: study.chapters.filter(chapter => !chapter.title.trimStart().startsWith('***')),
-      }))
       .filter(study => study.chapters.length > 0)
 
     const warningMessage = buildParseWarningMessage(parsed.warnings.map(warning => warning.message))
@@ -931,12 +834,14 @@ function App() {
       uploaded.push(imported.stored)
     })
 
-    await Promise.all([
-      ...uploaded.map(study => uploadStudy(study)),
-      uploadScores(),
-      uploadForkMainlines(),
-    ])
-  }, [importSingleStudy])
+    if (syncUser) {
+      await Promise.all([
+        ...uploaded.map(study => uploadStudy(syncUser.uid, study)),
+        uploadScores(syncUser.uid, false),
+        uploadForkMainlines(syncUser.uid, false),
+      ])
+    }
+  }, [importSingleStudy, syncUser])
 
   const { lichessSyncing, handleSyncWithLichess } = useLichessSync({
     runLichessSync,
@@ -955,7 +860,12 @@ function App() {
       confirmLabel: 'Delete study',
       action: () => {
         setStoredStudies(deleteStudy(id))
-        Promise.all([deleteStudyRemote(id, study?.name), uploadScores(), uploadForkMainlines()])
+        if (!syncUser) return
+        Promise.all([
+          deleteStudyRemote(syncUser.uid, id, study?.name),
+          uploadScores(syncUser.uid, false),
+          uploadForkMainlines(syncUser.uid, false),
+        ])
           .then(() => {
             setSyncStatus('ok')
             setSyncError(null)
@@ -985,8 +895,15 @@ function App() {
         setStoredStudies(updated)
 
         const updatedStudy = updated.find(item => item.id === studyId)
-        const studyOp = updatedStudy ? uploadStudy(updatedStudy) : deleteStudyRemote(studyId, study?.name)
-        Promise.all([studyOp, uploadScores(), uploadForkMainlines()])
+        if (!syncUser) return
+        const studyOp = updatedStudy
+          ? uploadStudy(syncUser.uid, updatedStudy)
+          : deleteStudyRemote(syncUser.uid, studyId, study?.name)
+        Promise.all([
+          studyOp,
+          uploadScores(syncUser.uid, false),
+          uploadForkMainlines(syncUser.uid, false),
+        ])
           .then(() => {
             setSyncStatus('ok')
             setSyncError(null)
@@ -1005,12 +922,8 @@ function App() {
     const chapter = study.chapters[chapterIndex]
     const cid = chapterId(study.id, study.chapters, chapterIndex)
 
-    const lines = extractLines(chapter, study.playerColor)
-    const { sidelineAlts } = buildChapterTrainingLines(chapter)
-    const validLineIds = new Set([
-      ...lines.map(line => line.lineId),
-      ...sidelineAlts.map(alt => alt.lineId),
-    ])
+    const lines = collectChapterReviewLines(chapter, study.playerColor)
+    const validLineIds = new Set(lines.map(line => line.lineId))
     syncChapterLines(cid, validLineIds)
     lines.forEach(line => initScore(cid, line.lineId, line.displaySan))
 
@@ -1020,7 +933,6 @@ function App() {
     setTrainingSessionKey(key => key + 1)
     setQuizMode(true)
     resetTrainingProgress()
-    setStatsKey(key => key + 1)
     setView('training')
   }
 
@@ -1035,6 +947,21 @@ function App() {
     trainChapter(picked.study, picked.chapterIndex, picked.priority)
   }
 
+  const handleQuizDone = useEffectEvent(() => {
+    maybeFireDailyChapterStreakAnimation()
+    if (globalSessionDoneRef.current) {
+      globalSessionDoneRef.current = false
+      return
+    }
+    pickAndTrainNext()
+  })
+
+  useEffect(() => {
+    if (!quizDone) return
+    const timeout = setTimeout(handleQuizDone, 500)
+    return () => clearTimeout(timeout)
+  }, [quizDone])
+
   function trainFromSelection() {
     if (selectedChapterIds.size === 0) return
     setSelectionMode(false)
@@ -1044,7 +971,8 @@ function App() {
   function toggleChapter(cid: string) {
     setSelectedChapterIds(previous => {
       const next = new Set(previous)
-      next.has(cid) ? next.delete(cid) : next.add(cid)
+      if (next.has(cid)) next.delete(cid)
+      else next.add(cid)
       return next
     })
   }
@@ -1061,7 +989,7 @@ function App() {
     })
   }
 
-  function handleQuizMove(from: string, to: string): boolean {
+  function handleQuizMove(from: string, to: string, promotion: 'q' | 'r' | 'b' | 'n' = 'q'): boolean {
     if (!quizMode || !selectedChapter || quizDone || !activeLine) return false
 
     const { line } = activeLine
@@ -1073,7 +1001,7 @@ function App() {
 
     const expected = line[nextIndex]
     const chess = new Chess(fen)
-    const result = chess.move({ from, to, promotion: 'q' })
+    const result = chess.move({ from, to, promotion })
     if (!result) return false
 
     if (chess.fen() === expected.fen) {
@@ -1102,14 +1030,14 @@ function App() {
     if (chapterIndex < 0) return
 
     // Record as failed
-    recordReview(
+    const record = recordReview(
       chapterId(selectedStudyId, chapters, chapterIndex),
       activeLine.lineId,
       activeLine.scoreDisplaySan,
       1,
       spacedRepetitionIntensity
     )
-    void persistReviewData()
+    void persistReviewData(record)
 
     setQuizWrong(null)
     setRevealedAnswer(false)
@@ -1127,41 +1055,7 @@ function App() {
       return
     }
 
-    if (isGlobalSessionRef.current) {
-      const nextEntry = globalQueueRef.current[0]
-      if (!nextEntry) {
-        isGlobalSessionRef.current = false
-        globalSessionDoneRef.current = true
-        setQuizDone(true)
-        return
-      }
-      globalQueueRef.current = globalQueueRef.current.slice(1)
-      const queueLines = globalQueueRef.current.map(e => e.line).slice(0, MAX_QUEUE_SIZE)
-      trainingQueueRef.current = queueLines
-      setTrainingQueue(queueLines)
-      if (nextEntry.chapter !== selectedChapter) {
-        setSelectedChapter(nextEntry.chapter)
-        setSelectedStudyId(nextEntry.study.id)
-        setChapters(nextEntry.study.chapters)
-        setActivePlayerColor(nextEntry.study.playerColor)
-      }
-      const nextUserColor = nextEntry.study.playerColor === 'white' ? 'w' : 'b'
-      setActiveLine(nextEntry.line)
-      setMoveIndex(findQuizStartMoveIndex(nextEntry.chapter, nextEntry.line.line, nextUserColor, undefined, nextEntry.line.label))
-      setBoardResetKey(key => key + 1)
-      return
-    }
-
-    const next = trainingQueueRef.current[0]
-    if (!next) {
-      setQuizDone(true)
-      return
-    }
-    trainingQueueRef.current = trainingQueueRef.current.slice(1)
-    setTrainingQueue(trainingQueueRef.current)
-    setActiveLine(next)
-    setMoveIndex(findQuizStartMoveIndex(selectedChapter, next.line, userColor, undefined, next.label))
-    setBoardResetKey(key => key + 1)
+    advanceToNextTrainingLine()
   }
 
   function handleRepertoireGoHome() {
@@ -1171,17 +1065,25 @@ function App() {
   }
 
   function requestResetScores() {
+    if (syncUser && syncStatus !== 'ok') {
+      setError('Wait for cloud sync to finish before resetting scores.')
+      return
+    }
     setConfirmDialog({
       title: 'Reset all scores?',
       message: 'This will permanently clear all review scores, due dates, streak activity, and variation retry data for every chapter.',
       confirmLabel: 'Reset scores',
       action: () => {
-        importAllScores([])
-        importForkMainlines([])
-        importReviewActivity([])
-        setStatsKey(key => key + 1)
+        clearScores()
+        clearForkMainlines()
+        clearReviewActivity()
 
-        Promise.all([uploadScores(), uploadForkMainlines(), uploadReviewActivity()])
+        if (!syncUser) return
+        Promise.all([
+          uploadScores(syncUser.uid, true),
+          uploadForkMainlines(syncUser.uid),
+          uploadReviewActivity(syncUser.uid, true),
+        ])
           .then(() => {
             setSyncStatus('ok')
             setSyncError(null)
@@ -1226,7 +1128,11 @@ function App() {
           onSetUploadColor={setUploadColor}
           lichessSyncing={lichessSyncing}
           lichessUsername={lichessUsername}
+          syncUser={syncUser}
+          syncAuthLoading={syncAuthLoading}
           onSyncWithLichess={handleSyncWithLichess}
+          onSignInToSync={() => { void handleSyncSignIn() }}
+          onSignOutOfSync={() => { void handleSyncSignOut() }}
           onOpenUpload={() => fileInputRef.current?.click()}
           onFileChange={handleFileChange}
           onDismissConflicts={() => setConflictWarnings([])}

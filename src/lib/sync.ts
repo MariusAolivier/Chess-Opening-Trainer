@@ -1,106 +1,103 @@
-import { db } from './firebase'
 import {
-  collection, doc, getDoc, getDocs,
-  setDoc, deleteDoc, onSnapshot,
+  collection,
+  doc,
+  getDocs,
+  onSnapshot,
+  runTransaction,
+  serverTimestamp,
+  setDoc,
+  writeBatch,
+  type DocumentData,
+  type QuerySnapshot,
+  type Timestamp,
+  type WriteBatch,
 } from 'firebase/firestore'
+import { db } from './firebase'
 import type { Chapter } from './pgn'
 import type { StoredStudy } from './storage'
-import { loadStudies, buildChapterIds } from './storage'
-import type { ScoreRecord } from './scores'
-import { loadScores, importAllScores, loadReviewActivity, importReviewActivity, remapChapterIds } from './scores'
-import type { ForkMainlineRecord } from './scores'
-import { exportForkMainlines, importForkMainlines } from './scores'
-import type { ReviewActivityRecord } from './scores'
-
-// Firestore layout (no auth, single user):
-//   studies/{studyId}       — one document per study
-//   app/scores              — { records: ScoreRecord[] }
-//   app/forkMainlines       — { mainlines: ForkMainlineRecord[] }
-//   app/reviewActivity      — { records: ReviewActivityRecord[] }
-
-const studyDoc = (id: string) => doc(db, 'studies', id)
-const scoresDoc = doc(db, 'app', 'scores')
-const forkMainlinesDoc = doc(db, 'app', 'forkMainlines')
-const reviewActivityDoc = doc(db, 'app', 'reviewActivity')
-
-function isNewScoreLineId(lineId: string): boolean {
-  return lineId.startsWith('main::') || lineId.startsWith('var::')
-}
-
-function legacyScoreLineId(lineId: string): string {
-  if (lineId.startsWith('main::')) return lineId.slice('main::'.length)
-  if (lineId.startsWith('var::')) {
-    const lastSep = lineId.lastIndexOf('::')
-    if (lastSep > 0) return lineId.slice(lastSep + 2)
-  }
-  return lineId
-}
-
-function scoreRecency(record: ScoreRecord): number {
-  const reviewed = record.lastReviewedAt ? Date.parse(record.lastReviewedAt) : Number.NaN
-  if (!Number.isNaN(reviewed)) return reviewed
-  const due = Date.parse(record.dueDate)
-  if (!Number.isNaN(due)) return due
-  return 0
-}
-
-function pickNewerScore(left: ScoreRecord, right: ScoreRecord): ScoreRecord {
-  return scoreRecency(right) >= scoreRecency(left) ? right : left
-}
-
-function collapseRemoteScoreRecords(records: ScoreRecord[]): ScoreRecord[] {
-  // Group by chapter + legacy identity, then prefer new-format ids when available.
-  const byLegacy = new Map<string, ScoreRecord[]>()
-  records.forEach(record => {
-    if (!record || typeof record.chapterId !== 'string' || typeof record.lineId !== 'string') return
-    const legacyId = legacyScoreLineId(record.lineId)
-    const key = `${record.chapterId}||${legacyId}`
-    const list = byLegacy.get(key) ?? []
-    list.push(record)
-    byLegacy.set(key, list)
-  })
-
-  const collapsed: ScoreRecord[] = []
-  byLegacy.forEach(group => {
-    const newFormat = group.filter(record => isNewScoreLineId(record.lineId))
-    const source = newFormat.length > 0 ? newFormat : group
-    const chosen = source.reduce((best, current) => pickNewerScore(best, current))
-    collapsed.push(chosen)
-  })
-
-  return collapsed
-}
-
-function expandScoresForUpload(records: ScoreRecord[]): ScoreRecord[] {
-  // Keep canonical records and add legacy mirrors so older cached clients can still sync.
-  const byId = new Map<string, ScoreRecord>()
-
-  records.forEach(record => {
-    if (!record || typeof record.chapterId !== 'string' || typeof record.lineId !== 'string') return
-    const key = `${record.chapterId}||${record.lineId}`
-    const existing = byId.get(key)
-    byId.set(key, existing ? pickNewerScore(existing, record) : record)
-
-    if (isNewScoreLineId(record.lineId)) {
-      const legacyId = legacyScoreLineId(record.lineId)
-      const mirror: ScoreRecord = { ...record, lineId: legacyId }
-      const mirrorKey = `${mirror.chapterId}||${mirror.lineId}`
-      const existingMirror = byId.get(mirrorKey)
-      byId.set(mirrorKey, existingMirror ? pickNewerScore(existingMirror, mirror) : mirror)
-    }
-  })
-
-  return [...byId.values()]
-}
+import { buildChapterIds, loadStudies } from './storage'
+import type { ForkMainlineRecord, ReviewActivityRecord, ScoreRecord } from './scores'
+import {
+  exportForkMainlines,
+  importForkMainlines,
+  importReviewActivity,
+  getLocalDeviceReviewCount,
+  getReviewDeviceId,
+  loadReviewActivity,
+  loadScores,
+  remapChapterIds,
+  replaceAllScores,
+} from './scores'
 
 type FirestoreStudy = {
   id: string
   name: string
   playerColor: 'white' | 'black'
-  // New format: flattened to avoid Firestore nested-depth limits.
   chaptersJson?: string
-  // Legacy format kept for backward compatibility.
   chapters?: Chapter[]
+  updatedAt?: string
+  deletedAt?: Timestamp
+}
+
+type FirestoreScore = {
+  record?: ScoreRecord
+  deletedAt?: Timestamp
+}
+
+interface RemoteReviewActivityCounter {
+  day: string
+  deviceId: string
+  count: number
+  updatedAt: string
+}
+
+type FirestoreReviewActivity = {
+  day?: string
+  record?: ReviewActivityRecord | RemoteReviewActivityCounter
+  deletedAt?: Timestamp
+}
+
+type FirestoreForkMainline = {
+  record?: ForkMainlineRecord
+  deletedAt?: Timestamp
+}
+
+const studiesCollection = (userId: string) => collection(db, 'users', userId, 'studies')
+const studyDoc = (userId: string, id: string) => doc(db, 'users', userId, 'studies', id)
+const scoresCollection = (userId: string) => collection(db, 'users', userId, 'scores')
+const forkMainlinesCollection = (userId: string) => collection(db, 'users', userId, 'forkMainlines')
+const reviewActivityCollection = (userId: string) => collection(db, 'users', userId, 'reviewActivity')
+
+function stableDocumentId(value: string): string {
+  let first = 0x811c9dc5
+  let second = 0x9e3779b9
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    first = Math.imul(first ^ code, 0x01000193)
+    second = Math.imul(second ^ code, 0x85ebca6b)
+  }
+  return `${(first >>> 0).toString(16).padStart(8, '0')}${(second >>> 0).toString(16).padStart(8, '0')}`
+}
+
+function scoreDocumentId(record: Pick<ScoreRecord, 'chapterId' | 'lineId'>): string {
+  return stableDocumentId(`${record.chapterId}\u0000${record.lineId}`)
+}
+
+function forkMainlineDocumentId(record: ForkMainlineRecord): string {
+  return stableDocumentId(`${record.chapterId}\u0000${record.forkFen}`)
+}
+
+function reviewActivityDocumentId(day: string, deviceId: string): string {
+  return stableDocumentId(`${day}\u0000${deviceId}`)
+}
+
+async function commitOperations(operations: Array<(batch: WriteBatch) => void>): Promise<void> {
+  const batchSize = 400
+  for (let offset = 0; offset < operations.length; offset += batchSize) {
+    const batch = writeBatch(db)
+    operations.slice(offset, offset + batchSize).forEach(operation => operation(batch))
+    await batch.commit()
+  }
 }
 
 function normalizeStudyName(name: string): string {
@@ -113,17 +110,30 @@ function encodeStudy(study: StoredStudy): FirestoreStudy {
     name: study.name,
     playerColor: study.playerColor,
     chaptersJson: JSON.stringify(study.chapters),
+    updatedAt: study.updatedAt ?? new Date().toISOString(),
   }
 }
 
 function decodeStudy(data: FirestoreStudy): StoredStudy | null {
-  if (typeof data.id !== 'string' || typeof data.name !== 'string') return null
-  const playerColor = (data.playerColor ?? 'white') as 'white' | 'black'
+  if (
+    typeof data.id !== 'string' ||
+    typeof data.name !== 'string' ||
+    (data.playerColor !== 'white' && data.playerColor !== 'black')
+  ) {
+    return null
+  }
 
   if (typeof data.chaptersJson === 'string') {
     try {
-      const chapters = JSON.parse(data.chaptersJson) as Chapter[]
-      return { id: data.id, name: data.name, playerColor, chapters }
+      const chapters = JSON.parse(data.chaptersJson) as unknown
+      if (!Array.isArray(chapters)) return null
+      return {
+        id: data.id,
+        name: data.name,
+        playerColor: data.playerColor,
+        chapters: chapters as Chapter[],
+        updatedAt: data.updatedAt,
+      }
     } catch {
       return null
     }
@@ -133,16 +143,13 @@ function decodeStudy(data: FirestoreStudy): StoredStudy | null {
     return {
       id: data.id,
       name: data.name,
-      playerColor,
+      playerColor: data.playerColor,
       chapters: data.chapters,
+      updatedAt: data.updatedAt,
     }
   }
 
   return null
-}
-
-function studyNameKey(study: StoredStudy): string {
-  return normalizeStudyName(study.name)
 }
 
 function parseStudyTimestamp(studyId: string): number | null {
@@ -152,10 +159,15 @@ function parseStudyTimestamp(studyId: string): number | null {
 }
 
 function pickPreferredStudy(left: StoredStudy, right: StoredStudy): StoredStudy {
-  const leftTs = parseStudyTimestamp(left.id)
-  const rightTs = parseStudyTimestamp(right.id)
-  if (leftTs !== null && rightTs !== null) {
-    return rightTs >= leftTs ? right : left
+  const leftUpdatedAt = left.updatedAt ? Date.parse(left.updatedAt) : 0
+  const rightUpdatedAt = right.updatedAt ? Date.parse(right.updatedAt) : 0
+  if (leftUpdatedAt !== rightUpdatedAt) {
+    return rightUpdatedAt > leftUpdatedAt ? right : left
+  }
+  const leftTimestamp = parseStudyTimestamp(left.id)
+  const rightTimestamp = parseStudyTimestamp(right.id)
+  if (leftTimestamp !== null && rightTimestamp !== null) {
+    return rightTimestamp >= leftTimestamp ? right : left
   }
   if (right.chapters.length !== left.chapters.length) {
     return right.chapters.length >= left.chapters.length ? right : left
@@ -163,7 +175,10 @@ function pickPreferredStudy(left: StoredStudy, right: StoredStudy): StoredStudy 
   return right.id >= left.id ? right : left
 }
 
-function buildChapterIdRemap(studiesById: Map<string, StoredStudy>, studyIdRemap: Map<string, string>): Map<string, string> {
+function buildChapterIdRemap(
+  studiesById: Map<string, StoredStudy>,
+  studyIdRemap: Map<string, string>,
+): Map<string, string> {
   const chapterRemap = new Map<string, string>()
 
   studyIdRemap.forEach((toStudyId, fromStudyId) => {
@@ -174,128 +189,297 @@ function buildChapterIdRemap(studiesById: Map<string, StoredStudy>, studyIdRemap
 
     const fromIds = buildChapterIds(fromStudy.id, fromStudy.chapters)
     const toIds = buildChapterIds(toStudy.id, toStudy.chapters)
-
     const toBySuffix = new Map<string, string>()
+
     toIds.forEach(id => {
-      const splitIndex = id.indexOf('::')
-      if (splitIndex < 0) return
-      toBySuffix.set(id.slice(splitIndex + 2), id)
+      const separator = id.indexOf('::')
+      if (separator >= 0) toBySuffix.set(id.slice(separator + 2), id)
     })
 
     fromIds.forEach((fromId, index) => {
-      const splitIndex = fromId.indexOf('::')
-      if (splitIndex >= 0) {
-        const suffix = fromId.slice(splitIndex + 2)
-        const target = toBySuffix.get(suffix)
-        if (target) chapterRemap.set(fromId, target)
-      }
-      const legacyId = `${fromStudy.id}_${index}`
+      const separator = fromId.indexOf('::')
+      const target = separator >= 0 ? toBySuffix.get(fromId.slice(separator + 2)) : undefined
+      if (target) chapterRemap.set(fromId, target)
+
       const fallbackTarget = toIds[index]
-      if (fallbackTarget) {
-        chapterRemap.set(legacyId, fallbackTarget)
-      }
+      if (fallbackTarget) chapterRemap.set(`${fromStudy.id}_${index}`, fallbackTarget)
     })
   })
 
   return chapterRemap
 }
 
-// ── Uploads ─────────────────────────────────────────────────────────────────
-
-export async function uploadStudy(study: StoredStudy): Promise<void> {
-  const normalizedName = normalizeStudyName(study.name)
-  const studiesSnap = await getDocs(collection(db, 'studies'))
-
-  const duplicateIds = studiesSnap.docs
-    .filter(snapshot => {
-      const data = snapshot.data() as FirestoreStudy
-      return snapshot.id !== study.id && normalizeStudyName(data.name) === normalizedName
-    })
-    .map(snapshot => snapshot.id)
-
-  if (duplicateIds.length > 0) {
-    await Promise.all(duplicateIds.map(id => deleteDoc(studyDoc(id))))
+function legacyScoreLineId(lineId: string): string {
+  if (lineId.startsWith('main::')) return lineId.slice('main::'.length)
+  if (lineId.startsWith('var::')) {
+    const separator = lineId.lastIndexOf('::')
+    if (separator > 0) return lineId.slice(separator + 2)
   }
-
-  await setDoc(studyDoc(study.id), encodeStudy(study))
+  return lineId
 }
 
-export async function deleteStudyRemote(studyId: string, studyName?: string): Promise<void> {
-  const idsToDelete = new Set<string>([studyId])
-  const normalizedName = studyName ? normalizeStudyName(studyName) : null
+function scoreRecency(record: ScoreRecord): number {
+  const reviewedAt = record.lastReviewedAt ? Date.parse(record.lastReviewedAt) : Number.NaN
+  if (!Number.isNaN(reviewedAt)) return reviewedAt
+  const dueAt = Date.parse(record.dueDate)
+  return Number.isNaN(dueAt) ? 0 : dueAt
+}
 
-  if (normalizedName) {
-    const studiesSnap = await getDocs(collection(db, 'studies'))
-    studiesSnap.docs.forEach(snapshot => {
-      const data = snapshot.data() as FirestoreStudy
-      if (normalizeStudyName(data.name) === normalizedName) {
-        idsToDelete.add(snapshot.id)
+function collapseRemoteScoreRecords(records: ScoreRecord[]): ScoreRecord[] {
+  const grouped = new Map<string, ScoreRecord[]>()
+  records.forEach(record => {
+    if (!record || typeof record.chapterId !== 'string' || typeof record.lineId !== 'string') return
+    const key = `${record.chapterId}\u0000${legacyScoreLineId(record.lineId)}`
+    const group = grouped.get(key) ?? []
+    group.push(record)
+    grouped.set(key, group)
+  })
+
+  return [...grouped.values()].map(group => {
+    const canonical = group.filter(record => record.lineId.startsWith('main::') || record.lineId.startsWith('var::'))
+    const candidates = canonical.length > 0 ? canonical : group
+    return candidates.reduce((newest, record) => scoreRecency(record) >= scoreRecency(newest) ? record : newest)
+  })
+}
+
+export async function uploadStudy(userId: string, study: StoredStudy): Promise<void> {
+  const target = studyDoc(userId, study.id)
+  const written = await runTransaction(db, async transaction => {
+    const existing = await transaction.get(target)
+    if (existing.exists()) {
+      const data = existing.data() as FirestoreStudy
+      const deletedAt = data.deletedAt?.toMillis()
+      const localUpdatedAt = study.updatedAt ? Date.parse(study.updatedAt) : 0
+      if (deletedAt !== undefined && localUpdatedAt <= deletedAt) return false
+      const remoteUpdatedAt = data.updatedAt ? Date.parse(data.updatedAt) : 0
+      if (remoteUpdatedAt > localUpdatedAt) return false
+    }
+    transaction.set(target, encodeStudy(study))
+    return true
+  })
+  if (!written) return
+
+  const normalizedName = normalizeStudyName(study.name)
+  const localUpdatedAt = study.updatedAt ? Date.parse(study.updatedAt) : 0
+  const snapshot = await getDocs(studiesCollection(userId))
+  const duplicates = snapshot.docs.filter(item => {
+    const data = item.data() as FirestoreStudy
+    const remoteUpdatedAt = data.updatedAt ? Date.parse(data.updatedAt) : 0
+    return (
+      item.id !== study.id &&
+      typeof data.name === 'string' &&
+      normalizeStudyName(data.name) === normalizedName &&
+      remoteUpdatedAt <= localUpdatedAt
+    )
+  })
+  await Promise.all(duplicates.map(item => setDoc(item.ref, { deletedAt: serverTimestamp() })))
+}
+
+export async function deleteStudyRemote(userId: string, studyId: string, studyName?: string): Promise<void> {
+  const ids = new Set([studyId])
+  if (studyName) {
+    const normalizedName = normalizeStudyName(studyName)
+    const snapshot = await getDocs(studiesCollection(userId))
+    snapshot.docs.forEach(item => {
+      const data = item.data() as FirestoreStudy
+      if (typeof data.name === 'string' && normalizeStudyName(data.name) === normalizedName) ids.add(item.id)
+    })
+  }
+  await Promise.all([...ids].map(id => setDoc(
+    studyDoc(userId, id),
+    { deletedAt: serverTimestamp() },
+  )))
+}
+
+export async function uploadScore(userId: string, record: ScoreRecord): Promise<void> {
+  const target = doc(scoresCollection(userId), scoreDocumentId(record))
+  await runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(target)
+    if (snapshot.exists()) {
+      const data = snapshot.data() as FirestoreScore & Partial<ScoreRecord>
+      const deletedAt = data.deletedAt?.toMillis()
+      if (deletedAt !== undefined && scoreRecency(record) <= deletedAt) return
+      const remoteRecord = data.record ?? (
+        typeof data.chapterId === 'string' && typeof data.lineId === 'string'
+          ? data as ScoreRecord
+          : undefined
+      )
+      if (remoteRecord && scoreRecency(remoteRecord) > scoreRecency(record)) return
+    }
+    transaction.set(target, { record })
+  })
+}
+
+export async function uploadScores(userId: string, deleteMissing = false): Promise<void> {
+  const records = loadScores()
+  await Promise.all(records.map(record => uploadScore(userId, record)))
+  if (!deleteMissing) return
+
+  const desiredIds = new Set(records.map(scoreDocumentId))
+  const snapshot = await getDocs(scoresCollection(userId))
+  const operations = snapshot.docs
+    .filter(existing => !desiredIds.has(existing.id))
+    .map(existing => (batch: WriteBatch) => {
+      batch.set(existing.ref, { deletedAt: serverTimestamp() })
+    })
+  await commitOperations(operations)
+}
+
+export async function uploadForkMainlines(userId: string, deleteMissing = true): Promise<void> {
+  const records = exportForkMainlines()
+  const reference = forkMainlinesCollection(userId)
+  const operations = records.map(record => (batch: WriteBatch) => {
+    batch.set(doc(reference, forkMainlineDocumentId(record)), { record })
+  })
+  if (deleteMissing) {
+    const desiredIds = new Set(records.map(forkMainlineDocumentId))
+    const snapshot = await getDocs(reference)
+    snapshot.docs.forEach(existing => {
+      if (!desiredIds.has(existing.id)) {
+        operations.push(batch => batch.set(existing.ref, { deletedAt: serverTimestamp() }))
+      }
+    })
+  }
+  await commitOperations(operations)
+}
+
+export async function uploadReviewActivity(userId: string, deleteMissing = true): Promise<void> {
+  const records = loadReviewActivity()
+  const reference = reviewActivityCollection(userId)
+  const deviceId = getReviewDeviceId()
+  const operations = records.map(record => (batch: WriteBatch) => {
+    const counter: RemoteReviewActivityCounter = {
+      day: record.day,
+      deviceId,
+      count: Math.max(getLocalDeviceReviewCount(record.day), record.count),
+      updatedAt: record.updatedAt ?? new Date().toISOString(),
+    }
+    batch.set(doc(reference, reviewActivityDocumentId(record.day, deviceId)), { record: counter })
+  })
+
+  if (deleteMissing) {
+    const desiredIds = new Set(records.map(record => reviewActivityDocumentId(record.day, deviceId)))
+    const snapshot = await getDocs(reference)
+    snapshot.docs.forEach(existing => {
+      if (!desiredIds.has(existing.id)) {
+        const data = existing.data() as FirestoreReviewActivity
+        const day = data.record?.day ?? data.day
+        operations.push(batch => batch.set(existing.ref, { day, deletedAt: serverTimestamp() }))
       }
     })
   }
 
-  await Promise.all([...idsToDelete].map(id => deleteDoc(studyDoc(id))))
+  await commitOperations(operations)
 }
 
-export async function uploadScores(): Promise<void> {
-  await setDoc(scoresDoc, { records: expandScoresForUpload(loadScores()) })
+export async function incrementRemoteReviewActivity(
+  userId: string,
+  localRecord: ReviewActivityRecord,
+): Promise<void> {
+  await syncRemoteDeviceReviewActivity(userId, localRecord, true)
 }
 
-export async function uploadForkMainlines(): Promise<void> {
-  await setDoc(forkMainlinesDoc, { mainlines: exportForkMainlines() })
+async function syncRemoteDeviceReviewActivity(
+  userId: string,
+  localRecord: ReviewActivityRecord,
+  isNewReview: boolean,
+): Promise<void> {
+  const { day } = localRecord
+  const deviceId = getReviewDeviceId()
+  const localDeviceCount = getLocalDeviceReviewCount(day)
+  const target = doc(
+    reviewActivityCollection(userId),
+    reviewActivityDocumentId(day, deviceId),
+  )
+  await runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(target)
+    const data = snapshot.data() as FirestoreReviewActivity | undefined
+    const remote = data?.record && 'deviceId' in data.record
+      ? data.record
+      : undefined
+    const deletedAt = data?.deletedAt?.toMillis()
+    const localIsAfterReset = deletedAt === undefined || activityRecency(localRecord) > deletedAt
+    if (!localIsAfterReset) return
+    const remoteCount = remote?.count ?? 0
+    const count = isNewReview
+      ? Math.max(remoteCount + 1, localDeviceCount)
+      : Math.max(remoteCount, localDeviceCount)
+    transaction.set(target, {
+      record: {
+        day,
+        deviceId,
+        count,
+        updatedAt: localRecord.updatedAt ?? new Date().toISOString(),
+      } satisfies RemoteReviewActivityCounter,
+    })
+  })
 }
 
-export async function uploadReviewActivity(): Promise<void> {
-  await setDoc(reviewActivityDoc, { records: loadReviewActivity() })
-}
-
-// ── Initial fetch & merge ────────────────────────────────────────────────────
-
-/**
- * Pull all data from Firestore and merge into localStorage.
- * Studies: Firestore is authoritative when it has data.
- * Scores: Firestore wins entirely (last-write-wins across devices).
- * Returns true if any data was fetched.
- */
-export async function fetchAndMerge(): Promise<boolean> {
-  const [studiesSnap, scoresSnap, forkSnap, reviewActivitySnap] = await Promise.all([
-    getDocs(collection(db, 'studies')),
-    getDoc(scoresDoc),
-    getDoc(forkMainlinesDoc),
-    getDoc(reviewActivityDoc),
+export async function fetchAndMerge(
+  userId: string,
+  shouldApply: () => boolean = () => true,
+): Promise<boolean> {
+  const [studiesSnapshot, scoresSnapshot, forkSnapshot, activitySnapshot] = await Promise.all([
+    getDocs(studiesCollection(userId)),
+    getDocs(scoresCollection(userId)),
+    getDocs(forkMainlinesCollection(userId)),
+    getDocs(reviewActivityCollection(userId)),
   ])
 
+  if (!shouldApply()) return false
   let changed = false
 
-  if (studiesSnap.empty) {
-    // Firestore has no studies yet — seed it from whatever is in localStorage
-    const local = loadStudies()
-    if (local.length > 0) {
-      await Promise.all(local.map(s => uploadStudy(s)))
-      await uploadScores()
-      await uploadForkMainlines()
-      await uploadReviewActivity()
-    }
-  } else {
-    // Firestore is the source of truth. Deduplicate same-name studies remotely,
-    // then mirror the result into localStorage so deletions propagate to devices.
-    const remoteStudies = studiesSnap.docs
-      .map(d => decodeStudy(d.data() as FirestoreStudy))
-      .filter((s): s is StoredStudy => s !== null)
-    const studiesById = new Map<string, StoredStudy>()
-    remoteStudies.forEach(study => studiesById.set(study.id, study))
+  {
+    const localById = new Map(loadStudies().map(study => [study.id, study]))
+    const reconciledStudies = new Map<string, StoredStudy>()
+    const studiesToUpload: StoredStudy[] = []
 
+    studiesSnapshot.docs.forEach(snapshot => {
+      const data = snapshot.data() as FirestoreStudy
+      const local = localById.get(snapshot.id)
+      localById.delete(snapshot.id)
+      const deletedAt = data.deletedAt?.toMillis()
+      if (deletedAt !== undefined) {
+        const localUpdatedAt = local?.updatedAt ? Date.parse(local.updatedAt) : 0
+        if (local && localUpdatedAt > deletedAt) {
+          reconciledStudies.set(local.id, local)
+          studiesToUpload.push(local)
+        }
+        return
+      }
+
+      const remote = decodeStudy(data)
+      if (!remote) return
+      const localUpdatedAt = local?.updatedAt ? Date.parse(local.updatedAt) : 0
+      const remoteUpdatedAt = remote.updatedAt ? Date.parse(remote.updatedAt) : 0
+      if (local && localUpdatedAt > remoteUpdatedAt) {
+        reconciledStudies.set(local.id, local)
+        studiesToUpload.push(local)
+      } else {
+        reconciledStudies.set(remote.id, remote)
+      }
+    })
+
+    localById.forEach(study => {
+      reconciledStudies.set(study.id, study)
+      studiesToUpload.push(study)
+    })
+
+    await Promise.all(studiesToUpload.map(study => uploadStudy(userId, study)))
+    if (!shouldApply()) return false
+
+    const remoteStudies = [...reconciledStudies.values()]
+    const studiesById = new Map(remoteStudies.map(study => [study.id, study]))
     const byName = new Map<string, StoredStudy>()
     const studyIdRemap = new Map<string, string>()
 
     remoteStudies.forEach(study => {
-      const key = studyNameKey(study)
+      const key = normalizeStudyName(study.name)
       const existing = byName.get(key)
       if (!existing) {
         byName.set(key, study)
         return
       }
-
       const winner = pickPreferredStudy(existing, study)
       const loser = winner.id === existing.id ? study : existing
       byName.set(key, winner)
@@ -306,81 +490,319 @@ export async function fetchAndMerge(): Promise<boolean> {
     merged.forEach(study => studiesById.set(study.id, study))
     localStorage.setItem('chess-opening-trainer:studies', JSON.stringify(merged))
 
-    const duplicateRemoteIds = [...studyIdRemap.entries()]
-      .filter(([fromStudyId, toStudyId]) => fromStudyId !== toStudyId)
-      .map(([fromStudyId]) => fromStudyId)
-    if (duplicateRemoteIds.length > 0) {
-      await Promise.all(duplicateRemoteIds.map(id => deleteDoc(studyDoc(id))))
-    }
+    const duplicateIds = [...studyIdRemap.keys()]
+    await Promise.all(duplicateIds.map(id => setDoc(
+      studyDoc(userId, id),
+      { deletedAt: serverTimestamp() },
+    )))
+    if (!shouldApply()) return false
 
     const chapterRemap = buildChapterIdRemap(studiesById, studyIdRemap)
-    if (chapterRemap.size > 0 && remapChapterIds(chapterRemap)) {
-      changed = true
-    }
-
-    changed = true
+    if (chapterRemap.size > 0) remapChapterIds(chapterRemap)
+    changed = !studiesSnapshot.empty || studiesToUpload.length > 0
   }
 
-  // Overwrite scores if Firestore has them
-  if (scoresSnap.exists()) {
-    const remoteRecords = collapseRemoteScoreRecords((scoresSnap.data().records ?? []) as ScoreRecord[])
-    if (remoteRecords.length > 0) {
-      importAllScores(remoteRecords)
-      changed = true
-    }
-  }
+  await reconcileScoreSnapshot(userId, scoresSnapshot, shouldApply)
+  if (!shouldApply()) return false
+  changed = changed || !scoresSnapshot.empty
 
-  // Overwrite fork mainlines if Firestore has them
-  if (forkSnap.exists()) {
-    const remoteMainlines = (forkSnap.data().mainlines ?? []) as ForkMainlineRecord[]
-    if (remoteMainlines.length > 0) {
-      importForkMainlines(remoteMainlines)
-      changed = true
-    }
-  }
+  await reconcileForkMainlineSnapshot(userId, forkSnapshot, shouldApply)
+  if (!shouldApply()) return false
+  changed = changed || !forkSnapshot.empty
 
-  if (!reviewActivitySnap.exists()) {
-    const localActivity = loadReviewActivity()
-    if (localActivity.length > 0) {
-      await uploadReviewActivity()
-    }
-  } else {
-    const remoteActivity = (reviewActivitySnap.data().records ?? []) as ReviewActivityRecord[]
-    if (remoteActivity.length > 0) {
-      importReviewActivity(remoteActivity)
-      changed = true
-    }
-  }
+  await reconcileReviewActivitySnapshot(userId, activitySnapshot, shouldApply)
+  if (!shouldApply()) return false
+  changed = changed || !activitySnapshot.empty
 
   return changed
 }
 
-// ── Real-time scores listener ────────────────────────────────────────────────
-
-/**
- * Subscribe to score changes in Firestore. When scores are updated on another
- * device, they're written into localStorage and `onChange` is called so the UI
- * can re-render. Returns an unsubscribe function.
- */
-export function subscribeToScores(onChange: () => void): () => void {
-  let isFirst = true
-  return onSnapshot(scoresDoc, snapshot => {
-    // Skip the immediate echo of our own writes
-    if (isFirst) { isFirst = false; return }
-    if (!snapshot.exists()) return
-    const records = collapseRemoteScoreRecords((snapshot.data().records ?? []) as ScoreRecord[])
-    importAllScores(records)
-    onChange()
-  })
+function forkMainlineRecency(record: ForkMainlineRecord): number {
+  if (!record.updatedAt) return 0
+  const updatedAt = Date.parse(record.updatedAt)
+  return Number.isNaN(updatedAt) ? 0 : updatedAt
 }
 
-export function subscribeToReviewActivity(onChange: () => void): () => void {
-  let isFirst = true
-  return onSnapshot(reviewActivityDoc, snapshot => {
-    if (isFirst) { isFirst = false; return }
-    if (!snapshot.exists()) return
-    const records = (snapshot.data().records ?? []) as ReviewActivityRecord[]
-    importReviewActivity(records)
-    onChange()
+async function reconcileForkMainlineSnapshot(
+  userId: string,
+  snapshot: QuerySnapshot<DocumentData, DocumentData>,
+  shouldApply: () => boolean = () => true,
+): Promise<void> {
+  if (!shouldApply()) return
+  const localById = new Map(exportForkMainlines().map(record => [forkMainlineDocumentId(record), record]))
+  const merged = new Map<string, ForkMainlineRecord>()
+  const uploads: ForkMainlineRecord[] = []
+
+  snapshot.docs.forEach(item => {
+    const data = item.data() as FirestoreForkMainline & Partial<ForkMainlineRecord>
+    const local = localById.get(item.id)
+    localById.delete(item.id)
+    const deletedAt = data.deletedAt?.toMillis()
+    if (deletedAt !== undefined) {
+      if (local && forkMainlineRecency(local) > deletedAt) {
+        merged.set(item.id, local)
+        uploads.push(local)
+      }
+      return
+    }
+    const remote = data.record ?? (
+      typeof data.chapterId === 'string' && typeof data.forkFen === 'string'
+        ? data as ForkMainlineRecord
+        : undefined
+    )
+    if (!remote) return
+    if (local && forkMainlineRecency(local) > forkMainlineRecency(remote)) {
+      merged.set(item.id, local)
+      uploads.push(local)
+    } else {
+      merged.set(item.id, remote)
+    }
   })
+
+  localById.forEach(record => {
+    merged.set(forkMainlineDocumentId(record), record)
+    uploads.push(record)
+  })
+  if (!shouldApply()) return
+  importForkMainlines([...merged.values()])
+  if (uploads.length > 0) {
+    const reference = forkMainlinesCollection(userId)
+    const operations = uploads.map(record => (batch: WriteBatch) => {
+      batch.set(doc(reference, forkMainlineDocumentId(record)), { record })
+    })
+    await commitOperations(operations)
+  }
+}
+
+export function subscribeToScores(
+  userId: string,
+  onChange: () => void,
+  onError: (error: Error) => void,
+  shouldApply: () => boolean = () => true,
+): () => void {
+  let generation = 0
+  return onSnapshot(
+    scoresCollection(userId),
+    snapshot => {
+      const run = ++generation
+      const runShouldApply = () => shouldApply() && run === generation
+      void reconcileScoreSnapshot(userId, snapshot, runShouldApply)
+        .then(() => {
+          if (runShouldApply()) onChange()
+        })
+        .catch(onError)
+    },
+    onError,
+  )
+}
+
+async function reconcileScoreSnapshot(
+  userId: string,
+  snapshot: QuerySnapshot<DocumentData, DocumentData>,
+  shouldApply: () => boolean = () => true,
+): Promise<void> {
+  if (!shouldApply()) return
+  const localById = new Map(loadScores().map(record => [scoreDocumentId(record), record]))
+  const merged = new Map<string, ScoreRecord>()
+  const uploads: ScoreRecord[] = []
+
+  snapshot.docs.forEach(item => {
+    const data = item.data() as FirestoreScore & Partial<ScoreRecord>
+    const local = localById.get(item.id)
+    localById.delete(item.id)
+
+    const deletedAt = data.deletedAt?.toMillis()
+    if (deletedAt !== undefined) {
+      if (local && scoreRecency(local) > deletedAt) {
+        merged.set(item.id, local)
+        uploads.push(local)
+      }
+      return
+    }
+
+    const remote = data.record ?? (
+      typeof data.chapterId === 'string' && typeof data.lineId === 'string'
+        ? data as ScoreRecord
+        : undefined
+    )
+    if (!remote) return
+    if (local && scoreRecency(local) > scoreRecency(remote)) {
+      merged.set(item.id, local)
+      uploads.push(local)
+    } else {
+      merged.set(item.id, remote)
+    }
+  })
+
+  localById.forEach(record => {
+    merged.set(scoreDocumentId(record), record)
+    uploads.push(record)
+  })
+
+  if (!shouldApply()) return
+  replaceAllScores(collapseRemoteScoreRecords([...merged.values()]))
+  await Promise.all(uploads.map(record => uploadScore(userId, record)))
+}
+
+export function subscribeToReviewActivity(
+  userId: string,
+  onChange: () => void,
+  onError: (error: Error) => void,
+  shouldApply: () => boolean = () => true,
+): () => void {
+  let generation = 0
+  return onSnapshot(
+    reviewActivityCollection(userId),
+    snapshot => {
+      const run = ++generation
+      const runShouldApply = () => shouldApply() && run === generation
+      void reconcileReviewActivitySnapshot(userId, snapshot, runShouldApply)
+        .then(() => {
+          if (runShouldApply()) onChange()
+        })
+        .catch(onError)
+    },
+    onError,
+  )
+}
+
+export function subscribeToStudiesAndMainlines(
+  userId: string,
+  onChange: (studies: StoredStudy[]) => void,
+  onError: (error: Error) => void,
+  shouldApply: () => boolean = () => true,
+  createReconcileGuard?: () => () => boolean,
+): () => void {
+  let generation = 0
+  const beginReconcile = createReconcileGuard ?? (() => {
+    const run = ++generation
+    return () => shouldApply() && run === generation
+  })
+
+  const refresh = () => {
+    const runShouldApply = beginReconcile()
+    void fetchAndMerge(userId, runShouldApply)
+      .then(() => {
+        if (runShouldApply()) onChange(loadStudies())
+      })
+      .catch(onError)
+  }
+
+  const unsubscribeStudies = onSnapshot(
+    studiesCollection(userId),
+    refresh,
+    onError,
+  )
+  const unsubscribeMainlines = onSnapshot(
+    forkMainlinesCollection(userId),
+    refresh,
+    onError,
+  )
+
+  return () => {
+    unsubscribeStudies()
+    unsubscribeMainlines()
+  }
+}
+
+function activityRecency(record: ReviewActivityRecord): number {
+  if (record.updatedAt) {
+    const updatedAt = Date.parse(record.updatedAt)
+    if (!Number.isNaN(updatedAt)) return updatedAt
+  }
+  const day = Date.parse(`${record.day}T23:59:59.999Z`)
+  return Number.isNaN(day) ? 0 : day
+}
+
+async function reconcileReviewActivitySnapshot(
+  userId: string,
+  snapshot: QuerySnapshot<DocumentData, DocumentData>,
+  shouldApply: () => boolean = () => true,
+): Promise<void> {
+  if (!shouldApply()) return
+  const localByDay = new Map(loadReviewActivity().map(record => [record.day, record]))
+  const remoteByDay = new Map<string, ReviewActivityRecord>()
+  const tombstonesByDay = new Map<string, number>()
+  const currentDeviceId = getReviewDeviceId()
+  const currentDeviceRemoteCounts = new Map<string, number>()
+  const currentDeviceTombstones = new Map<string, number>()
+
+  snapshot.docs.forEach(item => {
+    const data = item.data() as FirestoreReviewActivity & Partial<ReviewActivityRecord>
+    const deletedAt = data.deletedAt?.toMillis()
+    if (deletedAt !== undefined) {
+      const day = data.day ?? data.record?.day
+      if (day) {
+        tombstonesByDay.set(day, Math.max(tombstonesByDay.get(day) ?? 0, deletedAt))
+        if (item.id === reviewActivityDocumentId(day, currentDeviceId)) {
+          currentDeviceTombstones.set(day, deletedAt)
+        }
+      }
+      return
+    }
+
+    const storedRecord = data.record ?? (
+      typeof data.day === 'string' && typeof data.count === 'number'
+        ? data as ReviewActivityRecord
+        : undefined
+    )
+    if (!storedRecord) return
+    if ('deviceId' in storedRecord && storedRecord.deviceId === currentDeviceId) {
+      currentDeviceRemoteCounts.set(storedRecord.day, storedRecord.count)
+    } else if (!('deviceId' in storedRecord)) {
+      // Treat the legacy aggregate document as this device's seed to avoid duplicating it.
+      currentDeviceRemoteCounts.set(
+        storedRecord.day,
+        Math.max(currentDeviceRemoteCounts.get(storedRecord.day) ?? 0, storedRecord.count),
+      )
+    }
+    const remote: ReviewActivityRecord = {
+      day: storedRecord.day,
+      count: storedRecord.count,
+      updatedAt: storedRecord.updatedAt,
+    }
+    const existing = remoteByDay.get(remote.day)
+    remoteByDay.set(remote.day, {
+      day: remote.day,
+      count: (existing?.count ?? 0) + remote.count,
+      updatedAt: activityRecency(remote) >= activityRecency(existing ?? remote)
+        ? remote.updatedAt
+        : existing?.updatedAt,
+    })
+  })
+
+  const merged = new Map<string, ReviewActivityRecord>()
+  const deviceUploads: ReviewActivityRecord[] = []
+  const days = new Set([...localByDay.keys(), ...remoteByDay.keys(), ...tombstonesByDay.keys()])
+  days.forEach(day => {
+    const local = localByDay.get(day)
+    const remote = remoteByDay.get(day)
+    const tombstonedAt = tombstonesByDay.get(day) ?? 0
+    const localDeviceCount = getLocalDeviceReviewCount(day)
+    const remoteDeviceCount = currentDeviceRemoteCounts.get(day) ?? 0
+    const deviceTombstonedAt = currentDeviceTombstones.get(day) ?? 0
+    const hasPendingDeviceReviews = Boolean(
+      local &&
+      localDeviceCount > remoteDeviceCount &&
+      activityRecency(local) > deviceTombstonedAt,
+    )
+    const localIsCurrent = local && activityRecency(local) > Math.max(
+      tombstonedAt,
+      remote ? activityRecency(remote) : 0,
+    )
+
+    if (localIsCurrent || hasPendingDeviceReviews) {
+      merged.set(day, {
+        ...(local as ReviewActivityRecord),
+        count: Math.max(local?.count ?? 0, remote?.count ?? 0),
+      })
+      if (hasPendingDeviceReviews && local) deviceUploads.push(local)
+    } else if (remote) {
+      merged.set(day, remote)
+    }
+  })
+
+  if (!shouldApply()) return
+  importReviewActivity([...merged.values()])
+  await Promise.all(deviceUploads.map(record => syncRemoteDeviceReviewActivity(userId, record, false)))
 }

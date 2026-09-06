@@ -17,8 +17,20 @@
   gap: 8px;
   padding: 9px 12px;
   background: #2a2a3a;
-  cursor: pointer;
   user-select: none;
+}
+
+.rp-study-toggle {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
 }
 
 .rp-study-header-expanded {
@@ -135,7 +147,19 @@
   padding: 6px 10px;
   border-radius: 4px 4px 0 0;
   background: #252535;
+}
+
+.rp-chapter-toggle {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  background: transparent;
   cursor: pointer;
+  text-align: left;
 }
 
 .rp-chapter-row:hover {

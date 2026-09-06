@@ -15,7 +15,7 @@ export default defineConfig({
     }),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['app-logo.svg', 'apple-touch-icon.png'],
+      includeAssets: ['apple-touch-icon.png'],
       manifest: {
         name: 'Chess Opening Trainer',
         short_name: 'Chess Trainer',
@@ -34,4 +34,19 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) return 'firebase'
+          if (id.includes('node_modules/react')) return 'react'
+          if (
+            id.includes('node_modules/chess.js') ||
+            id.includes('node_modules/@lichess-org') ||
+            id.includes('node_modules/@mliebelt')
+          ) return 'chess'
+        },
+      },
+    },
+  },
 })

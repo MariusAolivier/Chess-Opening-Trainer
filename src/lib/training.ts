@@ -25,7 +25,8 @@ export const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq 
 const QUIZ_START_USER_TURN = 3
 
 function isThemeChapter(name?: string): boolean {
-  return name?.trimStart().toLocaleLowerCase().startsWith('theme') ?? false
+  const normalized = name?.trimStart().toLocaleLowerCase()
+  return normalized?.startsWith('***') || normalized?.startsWith('theme') || false
 }
 
 export const HOME_FENS = [

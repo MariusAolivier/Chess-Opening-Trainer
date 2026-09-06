@@ -278,7 +278,7 @@ export async function fetchLichessGameStats(
     if (!isWhite && !isBlack) continue
 
     const color: 'white' | 'black' = isWhite ? 'white' : 'black'
-    const key = `${game.opening.eco}::${color}`
+    const key = `${game.opening.eco}::${game.opening.name}::${color}`
     const stat = byKey.get(key) ?? { eco: game.opening.eco, opening: game.opening.name, color, wins: 0, draws: 0, losses: 0 }
 
     if (!game.winner) stat.draws++

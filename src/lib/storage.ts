@@ -1,11 +1,12 @@
-import type { Chapter } from './pgn'
-import { deleteScoresForStudy, deleteChapterScores } from './scores'
+import type { Chapter, MoveNode } from './pgn'
+import { deleteScoresForStudy, deleteChapterScores, remapChapterIds } from './scores'
 
 export interface StoredStudy {
   id: string       // unique key, timestamp-based
   name: string     // e.g. filename or first chapter event tag
   playerColor: 'white' | 'black'
   chapters: Chapter[]
+  updatedAt?: string
 }
 
 const KEY = 'chess-opening-trainer:studies'
@@ -22,6 +23,51 @@ function clampIntensity(value: number): 1 | 2 | 3 | 4 | 5 {
 
 function normalizeStudyName(name: string): string {
   return name.trim().toLocaleLowerCase()
+}
+
+function isMoveNode(value: unknown): value is MoveNode {
+  if (!value || typeof value !== 'object') return false
+  const node = value as Partial<MoveNode>
+  return (
+    typeof node.san === 'string' &&
+    typeof node.fen === 'string' &&
+    (node.comment === undefined || typeof node.comment === 'string') &&
+    (node.annotation === undefined || typeof node.annotation === 'string') &&
+    Array.isArray(node.children) &&
+    node.children.every(isMoveNode) &&
+    (node.independent === undefined || typeof node.independent === 'boolean')
+  )
+}
+
+function isChapter(value: unknown): value is Chapter {
+  if (!value || typeof value !== 'object') return false
+  const chapter = value as Partial<Chapter>
+  return (
+    typeof chapter.title === 'string' &&
+    typeof chapter.startFen === 'string' &&
+    (chapter.startComment === undefined || typeof chapter.startComment === 'string') &&
+    Array.isArray(chapter.moves) &&
+    chapter.moves.every(isMoveNode)
+  )
+}
+
+function normalizeStoredStudy(value: unknown): StoredStudy | null {
+  if (!value || typeof value !== 'object') return null
+  const study = value as Partial<StoredStudy>
+  if (
+    typeof study.id !== 'string' ||
+    typeof study.name !== 'string' ||
+    !Array.isArray(study.chapters) ||
+    !study.chapters.every(isChapter)
+  ) {
+    return null
+  }
+  const playerColor = study.playerColor ?? 'white'
+  if (playerColor !== 'white' && playerColor !== 'black') return null
+  const updatedAt = typeof study.updatedAt === 'string' && !Number.isNaN(Date.parse(study.updatedAt))
+    ? study.updatedAt
+    : undefined
+  return { id: study.id, name: study.name, playerColor, chapters: study.chapters, updatedAt }
 }
 
 export function loadSoundEnabled(): boolean {
@@ -84,8 +130,9 @@ export function saveCommentsVisible(visible: boolean): void {
 export function loadStudies(): StoredStudy[] {
   try {
     const raw = localStorage.getItem(KEY)
-    // Spread after parse to migrate old studies that lack playerColor
-    return raw ? (JSON.parse(raw) as StoredStudy[]).map(s => ({ ...s, playerColor: (s.playerColor ?? 'white') as 'white' | 'black' })) : []
+    const parsed = raw ? JSON.parse(raw) as unknown : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(normalizeStoredStudy).filter((study): study is StoredStudy => study !== null)
   } catch {
     return []
   }
@@ -96,17 +143,23 @@ export function saveStudy(name: string, playerColor: 'white' | 'black', chapters
   const normalizedName = normalizeStudyName(name)
   const sanitizedName = name.trim() || name
   const existing = studies.find(s => normalizeStudyName(s.name) === normalizedName)
+  const updatedAt = new Date().toISOString()
   if (existing) {
     // Replace in-place, keeping the same ID so scores are preserved
-    const study: StoredStudy = { ...existing, name: sanitizedName, playerColor, chapters }
+    const study: StoredStudy = { ...existing, name: sanitizedName, playerColor, chapters, updatedAt }
     const updated = studies.map(s => s.id === existing.id ? study : s)
     localStorage.setItem(KEY, JSON.stringify(updated))
     return study
   }
-  const study: StoredStudy = { id: Date.now().toString(), name: sanitizedName, playerColor, chapters }
+
+  const study: StoredStudy = { id: Date.now().toString(), name: sanitizedName, playerColor, chapters, updatedAt }
   studies.push(study)
   localStorage.setItem(KEY, JSON.stringify(studies))
   return study
+}
+
+export function clearStudies(): void {
+  localStorage.setItem(KEY, JSON.stringify([]))
 }
 
 export function deleteStudy(id: string): StoredStudy[] {
@@ -126,15 +179,37 @@ export function deleteChapter(studyId: string, chapterIndex: number): StoredStud
   const study = studies.find(s => s.id === studyId)
   if (!study) return studies
 
-  const deletedChapterId = chapterId(studyId, study.chapters, chapterIndex)
+  const oldChapterIds = buildChapterIds(studyId, study.chapters)
+  const deletedChapterId = oldChapterIds[chapterIndex]
+  const remainingChapters = study.chapters.filter((_, i) => i !== chapterIndex)
+  const updatedAt = new Date().toISOString()
   const updated = studies
     .map(s => {
       if (s.id !== studyId) return s
-      return { ...s, chapters: s.chapters.filter((_, i) => i !== chapterIndex) }
+      return { ...s, chapters: remainingChapters, updatedAt }
     })
     .filter(s => s.chapters.length > 0)
   localStorage.setItem(KEY, JSON.stringify(updated))
-  deleteChapterScores(deletedChapterId)
+
+  if (remainingChapters.length === 0) {
+    deleteScoresForStudy(studyId)
+    return updated
+  }
+
+  if (deletedChapterId) {
+    deleteChapterScores(deletedChapterId)
+  }
+
+  const nextChapterIds = buildChapterIds(studyId, remainingChapters)
+  const remap = new Map<string, string>()
+  study.chapters.forEach((_, oldIndex) => {
+    if (oldIndex === chapterIndex) return
+    const newIndex = oldIndex > chapterIndex ? oldIndex - 1 : oldIndex
+    const oldId = oldChapterIds[oldIndex]
+    const nextId = nextChapterIds[newIndex]
+    if (oldId && nextId && oldId !== nextId) remap.set(oldId, nextId)
+  })
+  remapChapterIds(remap)
   return updated
 }
 
@@ -187,7 +262,27 @@ export interface CachedInsights {
 export function loadInsights(): CachedInsights | null {
   try {
     const raw = localStorage.getItem(INSIGHTS_KEY)
-    return raw ? (JSON.parse(raw) as CachedInsights) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<CachedInsights>
+    if (
+      typeof parsed.username !== 'string' ||
+      typeof parsed.fetchedAt !== 'string' ||
+      Number.isNaN(Date.parse(parsed.fetchedAt)) ||
+      !Array.isArray(parsed.stats)
+    ) {
+      return null
+    }
+    const stats = parsed.stats.filter((stat): stat is CachedGameStat => (
+      Boolean(stat) &&
+      typeof stat === 'object' &&
+      typeof stat.eco === 'string' &&
+      typeof stat.opening === 'string' &&
+      (stat.color === 'white' || stat.color === 'black') &&
+      Number.isFinite(stat.wins) &&
+      Number.isFinite(stat.draws) &&
+      Number.isFinite(stat.losses)
+    ))
+    return { username: parsed.username, fetchedAt: parsed.fetchedAt, stats }
   } catch {
     return null
   }
