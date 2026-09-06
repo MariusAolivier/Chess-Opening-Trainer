@@ -29,32 +29,100 @@ export interface ScoreRecord {
 
 const KEY = 'chess-opening-trainer:scores'
 const REVIEW_ACTIVITY_KEY = 'chess-opening-trainer:review-activity'
+const DEVICE_REVIEW_ACTIVITY_KEY = 'chess-opening-trainer:device-review-activity'
+const REVIEW_DEVICE_ID_KEY = 'chess-opening-trainer:review-device-id'
+const scoreListeners = new Set<() => void>()
+const activityListeners = new Set<() => void>()
+let scoreCache: ScoreRecord[] | null = null
+let activityCache: ReviewActivityRecord[] | null = null
 
-export interface ReviewActivityRecord {
+interface DeviceReviewActivityRecord {
   day: string
   count: number
 }
 
+export interface ReviewActivityRecord {
+  day: string
+  count: number
+  updatedAt?: string
+}
+
+function isScoreRecord(value: unknown): value is ScoreRecord {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<ScoreRecord>
+  return (
+    typeof record.chapterId === 'string' &&
+    typeof record.lineId === 'string' &&
+    typeof record.displaySan === 'string' &&
+    typeof record.ease === 'number' &&
+    Number.isFinite(record.ease) &&
+    typeof record.interval === 'number' &&
+    Number.isFinite(record.interval) &&
+    typeof record.dueDate === 'string' &&
+    !Number.isNaN(Date.parse(record.dueDate)) &&
+    (record.lastReviewedAt === undefined || (
+      typeof record.lastReviewedAt === 'string' &&
+      !Number.isNaN(Date.parse(record.lastReviewedAt))
+    ))
+  )
+}
+
 function load(): ScoreRecord[] {
+  if (scoreCache) return scoreCache
   try {
     const raw = localStorage.getItem(KEY)
-    if (!raw) return []
-    // Filter out legacy records from the old (forkFen, firstMoveSan) schema
-    return (JSON.parse(raw) as ScoreRecord[]).filter(r => typeof r.lineId === 'string')
+    const parsed = raw ? JSON.parse(raw) as unknown : []
+    scoreCache = Array.isArray(parsed) ? parsed.filter(isScoreRecord) : []
   } catch {
-    return []
+    scoreCache = []
   }
+  return scoreCache
 }
 
 function save(records: ScoreRecord[]): void {
-  localStorage.setItem(KEY, JSON.stringify(records))
+  scoreCache = records.map(record => ({ ...record }))
+  localStorage.setItem(KEY, JSON.stringify(scoreCache))
+  scoreListeners.forEach(listener => listener())
 }
 
 function loadReviewActivityRaw(): ReviewActivityRecord[] {
+  if (activityCache) return activityCache
   try {
     const raw = localStorage.getItem(REVIEW_ACTIVITY_KEY)
-    if (!raw) return []
-    return (JSON.parse(raw) as ReviewActivityRecord[]).filter(record => (
+    const parsed = raw ? JSON.parse(raw) as unknown : []
+    activityCache = (Array.isArray(parsed) ? parsed : []).filter((record): record is ReviewActivityRecord => (
+      Boolean(record) &&
+      typeof record === 'object' &&
+      typeof record.day === 'string' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(record.day) &&
+      typeof record.count === 'number' &&
+      Number.isFinite(record.count) &&
+      record.count > 0 &&
+      (record.updatedAt === undefined || (
+        typeof record.updatedAt === 'string' &&
+        !Number.isNaN(Date.parse(record.updatedAt))
+      ))
+    ))
+  } catch {
+    activityCache = []
+  }
+  return activityCache
+}
+
+function saveReviewActivity(records: ReviewActivityRecord[]): void {
+  activityCache = records.map(record => ({ ...record }))
+  localStorage.setItem(REVIEW_ACTIVITY_KEY, JSON.stringify(activityCache))
+  activityListeners.forEach(listener => listener())
+}
+
+function loadDeviceReviewActivity(): DeviceReviewActivityRecord[] {
+  try {
+    const raw = localStorage.getItem(DEVICE_REVIEW_ACTIVITY_KEY)
+    const parsed = raw ? JSON.parse(raw) as unknown : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((record): record is DeviceReviewActivityRecord => (
+      Boolean(record) &&
+      typeof record === 'object' &&
       typeof record.day === 'string' &&
       typeof record.count === 'number' &&
       Number.isFinite(record.count) &&
@@ -65,8 +133,34 @@ function loadReviewActivityRaw(): ReviewActivityRecord[] {
   }
 }
 
-function saveReviewActivity(records: ReviewActivityRecord[]): void {
-  localStorage.setItem(REVIEW_ACTIVITY_KEY, JSON.stringify(records))
+function saveDeviceReviewActivity(records: DeviceReviewActivityRecord[]): void {
+  localStorage.setItem(DEVICE_REVIEW_ACTIVITY_KEY, JSON.stringify(records))
+}
+
+export function getReviewDeviceId(): string {
+  const existing = localStorage.getItem(REVIEW_DEVICE_ID_KEY)
+  if (existing) return existing
+  const id = crypto.randomUUID()
+  localStorage.setItem(REVIEW_DEVICE_ID_KEY, id)
+  return id
+}
+
+export function getLocalDeviceReviewCount(day: string): number {
+  const deviceRecord = loadDeviceReviewActivity().find(record => record.day === day)
+  return deviceRecord?.count ?? 0
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', event => {
+    if (event.key === KEY) {
+      scoreCache = null
+      scoreListeners.forEach(listener => listener())
+    }
+    if (event.key === REVIEW_ACTIVITY_KEY) {
+      activityCache = null
+      activityListeners.forEach(listener => listener())
+    }
+  })
 }
 
 function toDayKey(value: number): string {
@@ -75,6 +169,10 @@ function toDayKey(value: number): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+export function reviewDayKey(value: number = Date.now()): string {
+  return toDayKey(value)
 }
 
 function toDayNumber(dayKey: string): number {
@@ -91,13 +189,22 @@ export function loadScores(): ScoreRecord[] {
   return load()
 }
 
+export function getScoresSnapshot(): ScoreRecord[] {
+  return load()
+}
+
+export function subscribeToLocalScores(listener: () => void): () => void {
+  scoreListeners.add(listener)
+  return () => scoreListeners.delete(listener)
+}
+
 /**
  * Ensure a score record exists for this line.
  * If it already exists, does nothing. If new, creates it as "due now" with interval 0.
  * Call this at quiz start for every leaf line in the chapter.
  */
 export function initScore(chapterId: string, lineId: string, displaySan: string): void {
-  const records = load()
+  const records = [...load()]
   if (records.some(r => r.chapterId === chapterId && r.lineId === lineId)) return
   records.push({ chapterId, lineId, displaySan, ease: 2.5, interval: 0, dueDate: new Date().toISOString() })
   save(records)
@@ -111,7 +218,7 @@ const MAX_INTERVAL_DAYS = 30
  * (or from now if lastReviewedAt is missing).
  */
 export function capExistingScoreIntervals(): void {
-  const records = load()
+  const records = load().map(record => ({ ...record }))
   const capped = applyIntervalCap(records)
   const changed = capped.some((r, i) => r !== records[i])
   if (changed) save(capped)
@@ -135,7 +242,7 @@ export function recordReview(
   intensity: 1 | 2 | 3 | 4 | 5 = 3
 ): ScoreRecord {
   const reviewedAt = new Date().toISOString()
-  const records = load()
+  const records = load().map(record => ({ ...record }))
   const idx = records.findIndex(r => r.chapterId === chapterId && r.lineId === lineId)
 
   const existing = idx >= 0 ? records[idx] : undefined
@@ -157,7 +264,8 @@ export function recordReview(
     interval = Math.max(1, Math.round(baseInterval * intensityIntervalScale(intensity)))
   }
 
-  const dueDate = new Date(Date.now() + Math.min(interval, MAX_INTERVAL_DAYS) * 86_400_000).toISOString()
+  interval = Math.min(interval, MAX_INTERVAL_DAYS)
+  const dueDate = new Date(Date.now() + interval * 86_400_000).toISOString()
   const record: ScoreRecord = {
     chapterId,
     lineId,
@@ -198,25 +306,45 @@ export function loadReviewActivity(): ReviewActivityRecord[] {
   return loadReviewActivityRaw()
 }
 
+export function getReviewActivitySnapshot(): ReviewActivityRecord[] {
+  return loadReviewActivityRaw()
+}
+
+export function subscribeToLocalReviewActivity(listener: () => void): () => void {
+  activityListeners.add(listener)
+  return () => activityListeners.delete(listener)
+}
+
 export function importReviewActivity(records: ReviewActivityRecord[]): void {
   saveReviewActivity(records)
 }
 
 export function recordReviewActivity(at: number = Date.now()): void {
   const day = toDayKey(at)
-  const records = loadReviewActivityRaw()
+  const updatedAt = new Date(at).toISOString()
+  const records = loadReviewActivityRaw().map(record => ({ ...record }))
   const existing = records.find(record => record.day === day)
   if (existing) {
     existing.count += 1
+    existing.updatedAt = updatedAt
   } else {
-    records.push({ day, count: 1 })
+    records.push({ day, count: 1, updatedAt })
     records.sort((left, right) => left.day.localeCompare(right.day))
   }
   saveReviewActivity(records)
+
+  const deviceRecords = loadDeviceReviewActivity()
+  const deviceRecord = deviceRecords.find(record => record.day === day)
+  if (deviceRecord) deviceRecord.count += 1
+  else deviceRecords.push({ day, count: 1 })
+  saveDeviceReviewActivity(deviceRecords)
 }
 
-export function getReviewStreak(now: number = Date.now()): { current: number; best: number; todayCount: number } {
-  const records = loadReviewActivityRaw().sort((left, right) => left.day.localeCompare(right.day))
+export function calculateReviewStreak(
+  activity: ReviewActivityRecord[],
+  now: number = Date.now(),
+): { current: number; best: number; todayCount: number } {
+  const records = [...activity].sort((left, right) => left.day.localeCompare(right.day))
   if (records.length === 0) return { current: 0, best: 0, todayCount: 0 }
 
   const dayNumbers = records.map(record => toDayNumber(record.day))
@@ -251,6 +379,10 @@ export function getReviewStreak(now: number = Date.now()): { current: number; be
   return { current, best, todayCount }
 }
 
+export function getReviewStreak(now: number = Date.now()): { current: number; best: number; todayCount: number } {
+  return calculateReviewStreak(loadReviewActivityRaw(), now)
+}
+
 /** Delete all scores for a given study (e.g. when the study is deleted). */
 export function deleteScoresForStudy(studyId: string): void {
   const records = load().filter(r => !r.chapterId.startsWith(studyId + '_') && !r.chapterId.startsWith(studyId + '::'))
@@ -270,9 +402,11 @@ export function deleteChapterScores(chapterId: string): void {
   saveForkMainlines(mainlines)
 }
 
-function scorePriority(record: ScoreRecord): number {
-  const dueTime = Number.isNaN(Date.parse(record.dueDate)) ? 0 : Date.parse(record.dueDate)
-  return record.interval * 1_000_000_000 + dueTime
+function scoreRecency(record: ScoreRecord): number {
+  const reviewedAt = record.lastReviewedAt ? Date.parse(record.lastReviewedAt) : Number.NaN
+  if (!Number.isNaN(reviewedAt)) return reviewedAt
+  const dueAt = Date.parse(record.dueDate)
+  return Number.isNaN(dueAt) ? 0 : dueAt
 }
 
 export function remapChapterIds(remap: Map<string, string>): boolean {
@@ -288,7 +422,7 @@ export function remapChapterIds(remap: Map<string, string>): boolean {
     const nextRecord = nextChapterId === record.chapterId ? record : { ...record, chapterId: nextChapterId }
     const key = makeId(nextRecord.chapterId, nextRecord.lineId)
     const existing = scoresById.get(key)
-    if (!existing || scorePriority(nextRecord) > scorePriority(existing)) {
+    if (!existing || scoreRecency(nextRecord) > scoreRecency(existing)) {
       scoresById.set(key, nextRecord)
     }
   })
@@ -350,7 +484,37 @@ export function pruneStudyChapterIds(studyId: string, validChapterIds: Set<strin
  * Returns the number of records removed.
  */
 export function syncChapterLines(chapterId: string, validLineIds: Set<string>): number {
-  const records = load()
+  const legacyTargets = new Map<string, string[]>()
+  validLineIds.forEach(lineId => {
+    let legacyId: string | null = null
+    if (lineId.startsWith('main::')) {
+      legacyId = lineId.slice('main::'.length)
+    } else if (lineId.startsWith('var::')) {
+      const separator = lineId.lastIndexOf('::')
+      if (separator > 0) legacyId = lineId.slice(separator + 2)
+    }
+    if (!legacyId) return
+    const targets = legacyTargets.get(legacyId) ?? []
+    targets.push(lineId)
+    legacyTargets.set(legacyId, targets)
+  })
+
+  let didMigrate = false
+  const migrated = load().flatMap(record => {
+    if (record.chapterId !== chapterId || validLineIds.has(record.lineId)) return [record]
+    const targets = legacyTargets.get(record.lineId)
+    if (targets?.length) didMigrate = true
+    return targets?.map(lineId => ({ ...record, lineId })) ?? [record]
+  })
+  const recordsById = new Map<string, ScoreRecord>()
+  migrated.forEach(record => {
+    const id = makeId(record.chapterId, record.lineId)
+    const existing = recordsById.get(id)
+    if (!existing || scoreRecency(record) > scoreRecency(existing)) {
+      recordsById.set(id, record)
+    }
+  })
+  const records = [...recordsById.values()]
   let removed = 0
   const kept = records.filter(r => {
     if (r.chapterId === chapterId && !validLineIds.has(r.lineId)) {
@@ -359,7 +523,7 @@ export function syncChapterLines(chapterId: string, validLineIds: Set<string>): 
     }
     return true
   })
-  if (removed > 0) save(kept)
+  if (removed > 0 || didMigrate) save(kept)
   return removed
 }
 
@@ -398,6 +562,20 @@ export function importAllScores(records: ScoreRecord[]): void {
   save([...byId.values()])
 }
 
+/** Replace local scores with an authoritative snapshot, including an empty one. */
+export function replaceAllScores(records: ScoreRecord[]): void {
+  save(applyIntervalCap(records))
+}
+
+export function clearScores(): void {
+  save([])
+}
+
+export function clearReviewActivity(): void {
+  saveReviewActivity([])
+  saveDeviceReviewActivity([])
+}
+
 function applyIntervalCap(records: ScoreRecord[]): ScoreRecord[] {
   return records.map(r => {
     if (r.interval <= MAX_INTERVAL_DAYS) return r
@@ -416,6 +594,10 @@ export function importForkMainlines(records: ForkMainlineRecord[]): void {
   saveForkMainlines(records)
 }
 
+export function clearForkMainlines(): void {
+  saveForkMainlines([])
+}
+
 export type { ForkMainlineRecord }
 
 // ---------------------------------------------------------------------------
@@ -429,12 +611,25 @@ interface ForkMainlineRecord {
   chapterId: string
   forkFen: string
   mainlineSan: string
+  updatedAt?: string
 }
 
 function loadForkMainlines(): ForkMainlineRecord[] {
   try {
     const raw = localStorage.getItem(MAINLINES_KEY)
-    return raw ? (JSON.parse(raw) as ForkMainlineRecord[]) : []
+    const parsed = raw ? JSON.parse(raw) as unknown : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((record): record is ForkMainlineRecord => (
+      Boolean(record) &&
+      typeof record === 'object' &&
+      typeof record.chapterId === 'string' &&
+      typeof record.forkFen === 'string' &&
+      typeof record.mainlineSan === 'string' &&
+      (record.updatedAt === undefined || (
+        typeof record.updatedAt === 'string' &&
+        !Number.isNaN(Date.parse(record.updatedAt))
+      ))
+    ))
   } catch {
     return []
   }
@@ -456,8 +651,9 @@ export function updateForkMainlines(
 ): void {
   const mainlines = loadForkMainlines()
   const others = mainlines.filter(m => m.chapterId !== chapterId)
+  const updatedAt = new Date().toISOString()
   newForkMap.forEach((mainlineSan, forkFen) => {
-    others.push({ chapterId, forkFen, mainlineSan })
+    others.push({ chapterId, forkFen, mainlineSan, updatedAt })
   })
   saveForkMainlines(others)
 }

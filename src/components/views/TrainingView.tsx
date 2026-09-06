@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import Chessboard from '../Chessboard'
 import type { Chapter } from '../../lib/pgn'
 import type { StoredStudy } from '../../lib/storage'
@@ -60,22 +59,10 @@ export default function TrainingView({
   onRevealAnswer,
   onSkipCurrentLine,
 }: TrainingViewProps) {
-  const [isBoardShaking, setIsBoardShaking] = useState(false)
   const study = storedStudies.find(item => item.id === selectedStudyId)
   const userColor = activePlayerColor === 'white' ? 'w' : 'b'
   const line = activeLine?.line ?? []
   const startFen = selectedChapter?.startFen ?? ''
-
-  useEffect(() => {
-    if (wrongGuessTick === 0) return
-
-    setIsBoardShaking(true)
-    const timeout = window.setTimeout(() => {
-      setIsBoardShaking(false)
-    }, 420)
-
-    return () => window.clearTimeout(timeout)
-  }, [wrongGuessTick])
 
   function countMovesForSide(
     sFen: string,
@@ -155,7 +142,7 @@ export default function TrainingView({
         onMove={quizMode ? onMove : undefined}
         resetKey={boardResetKey}
         annotation={activeAnnotation}
-        className={isBoardShaking ? 'tv-board-shake' : undefined}
+        className={wrongGuessTick > 0 ? `tv-board-shake-${wrongGuessTick % 2}` : undefined}
       />
 
       {isRetryingVariation && (

@@ -26,7 +26,7 @@ const NAG_TO_GLYPH: Record<string, string> = {
 const GLYPH_TOKENS = new Set(['!', '?', '!!', '??', '!?', '?!'])
 
 function annotationFromSanSuffix(san: string): string | undefined {
-  const match = san.match(/(\!\?|\?\!|\!\!|\?\?|\!|\?)$/)
+  const match = san.match(/(!\?|\?!|!!|\?\?|!|\?)$/)
   return match?.[1]
 }
 
@@ -107,8 +107,15 @@ function buildLine(
   const [move, ...rest] = moves
 
   chess.load(parentFen)
-  const result = chess.move(move.notation.notation)
-  if (!result) return []
+  let result
+  try {
+    result = chess.move(move.notation.notation)
+  } catch {
+    throw new Error(`Invalid PGN move "${move.notation.notation}" at variation depth ${variationNesting}.`)
+  }
+  if (!result) {
+    throw new Error(`Invalid PGN move "${move.notation.notation}" at variation depth ${variationNesting}.`)
+  }
   const fen = chess.fen()
 
   const mainNode: MoveNode = {
@@ -124,8 +131,15 @@ function buildLine(
     if (varMoves.length === 0) return []
     const [varFirst, ...varRest] = varMoves
     chess.load(parentFen)
-    const varResult = chess.move(varFirst.notation.notation)
-    if (!varResult) return []
+    let varResult
+    try {
+      varResult = chess.move(varFirst.notation.notation)
+    } catch {
+      throw new Error(`Invalid PGN variation move "${varFirst.notation.notation}" at variation depth ${variationNesting + 1}.`)
+    }
+    if (!varResult) {
+      throw new Error(`Invalid PGN variation move "${varFirst.notation.notation}" at variation depth ${variationNesting + 1}.`)
+    }
     const varFen = chess.fen()
     const nestedLevel = variationNesting + 1
     if (maxVariationNestingRef) {

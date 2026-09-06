@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Chessground } from '@lichess-org/chessground'
 import { Chess } from 'chess.js'
+import type { Square } from 'chess.js'
 import type { Key } from '@lichess-org/chessground/types'
 import '@lichess-org/chessground/assets/chessground.base.css'
 import '@lichess-org/chessground/assets/chessground.brown.css'
@@ -52,9 +53,11 @@ function unlockMoveSounds() {
   })
 }
 
-function playMoveSound(from: string, to: string, preMoveChess: Chess) {
+type PromotionPiece = 'q' | 'r' | 'b' | 'n'
+
+function playMoveSound(from: string, to: string, preMoveChess: Chess, promotion: PromotionPiece = 'q') {
   const temp = new Chess(preMoveChess.fen())
-  const move = temp.move({ from, to, promotion: 'q' })
+  const move = temp.move({ from, to, promotion })
   if (!move) return
   let file: string
   if (temp.inCheck()) {
@@ -66,10 +69,16 @@ function playMoveSound(from: string, to: string, preMoveChess: Chess) {
   } else {
     file = 'move-self.mp3'
   }
+
   const audio = getMoveSound(file)
   audio.pause()
   audio.currentTime = 0
   audio.play().catch(() => {})
+}
+
+function isPromotionMove(chess: Chess, from: string, to: string): boolean {
+  const piece = chess.get(from as Square)
+  return piece?.type === 'p' && (to.endsWith('8') || to.endsWith('1'))
 }
 
 function getLegalDests(chess: Chess): Map<Key, Key[]> {
@@ -143,7 +152,7 @@ interface ChessboardProps {
   /** Board orientation (defaults to white at bottom) */
   orientation?: 'white' | 'black'
   /** Called when the user drags a piece in quiz mode. Return false to reject the move (snaps back instantly). */
-  onMove?: (from: string, to: string) => boolean | void
+  onMove?: (from: string, to: string, promotion?: PromotionPiece) => boolean | void
   /** Increment to force-reset the board to current fen (e.g. after a wrong guess) */
   resetKey?: number
 }
@@ -151,6 +160,7 @@ interface ChessboardProps {
 export default function Chessboard({ fen, annotation, readonly = false, soundEnabled = true, className, playerColor, orientation = 'white', onMove, resetKey }: ChessboardProps) {
   const [boardSize, setBoardSize] = useState(() => Math.min(400, window.innerWidth - 32))
   const [lastMoveTo, setLastMoveTo] = useState<string | null>(null)
+  const [pendingPromotion, setPendingPromotion] = useState<{ from: string; to: string; resetKey?: number } | null>(null)
 
   useEffect(() => {
     preloadMoveSounds()
@@ -185,6 +195,8 @@ export default function Chessboard({ fen, annotation, readonly = false, soundEna
   useEffect(() => { onMoveRef.current = onMove }, [onMove])
   const fenRef = useRef(fen)
   useEffect(() => { fenRef.current = fen }, [fen])
+  const resetKeyRef = useRef(resetKey)
+  useEffect(() => { resetKeyRef.current = resetKey }, [resetKey])
   const prevFenRef = useRef(fen)
   const prevResetKeyRef = useRef(resetKey)
 
@@ -208,9 +220,21 @@ export default function Chessboard({ fen, annotation, readonly = false, soundEna
       events: {
         move(from: Key, to: Key) {
           if (isQuiz) {
+            const currentChess = new Chess(fenRef.current ?? undefined)
+            if (isPromotionMove(currentChess, from, to)) {
+              ground.set({
+                animation: { enabled: false },
+                fen: fenRef.current ?? 'start',
+                lastMove: [],
+              })
+              requestAnimationFrame(() => { ground.set({ animation: { enabled: true } }) })
+              setPendingPromotion({ from, to, resetKey: resetKeyRef.current })
+              return
+            }
+
             const accepted = onMoveRef.current?.(from, to)
             if (accepted !== false && soundEnabled) {
-              playMoveSound(from, to, new Chess(fenRef.current ?? undefined))
+              playMoveSound(from, to, currentChess)
             }
             if (accepted !== false) {
               setLastMoveTo(to)
@@ -275,7 +299,7 @@ export default function Chessboard({ fen, annotation, readonly = false, soundEna
     const prevFen = prevFenRef.current
     prevFenRef.current = fen
     if (isReset) {
-      setLastMoveTo(null)
+      requestAnimationFrame(() => setLastMoveTo(null))
     }
     if (!readonly && playerColor) {
       const chess = new Chess(fen ?? undefined)
@@ -299,26 +323,55 @@ export default function Chessboard({ fen, annotation, readonly = false, soundEna
       }
       if (!isReset && prevFen && fen && prevFen !== fen) {
         const m = findMoveToReachFen(prevFen, fen)
-        setLastMoveTo(m?.to ?? null)
+        requestAnimationFrame(() => setLastMoveTo(m?.to ?? null))
       }
     } else {
       g.set({ fen: fen ?? 'start', lastMove: isReset ? [] : undefined })
       if (!isReset && prevFen && fen && prevFen !== fen) {
         const m = findMoveToReachFen(prevFen, fen)
-        setLastMoveTo(m?.to ?? null)
+        requestAnimationFrame(() => setLastMoveTo(m?.to ?? null))
       }
     }
-  }, [fen, resetKey, readonly, playerColor])
+  }, [fen, resetKey, readonly, playerColor, soundEnabled])
 
   const annotationPosition = annotation && lastMoveTo
     ? squareCornerAnchor(lastMoveTo, orientation, boardSize)
     : null
   const annotationClass = annotation ? annotationColorClass(annotation) : 'cg-annotation-default'
+  const visiblePromotion = pendingPromotion?.resetKey === resetKey ? pendingPromotion : null
+
+  function choosePromotion(promotion: PromotionPiece) {
+    if (!visiblePromotion) return
+    const currentChess = new Chess(fenRef.current ?? undefined)
+    const accepted = onMoveRef.current?.(visiblePromotion.from, visiblePromotion.to, promotion)
+    if (accepted !== false && soundEnabled) {
+      playMoveSound(visiblePromotion.from, visiblePromotion.to, currentChess, promotion)
+    }
+    if (accepted !== false) {
+      setLastMoveTo(visiblePromotion.to)
+    }
+    setPendingPromotion(null)
+  }
 
   return (
     <div className={className}>
       <div className="cg-board-shell" style={{ width: `${boardSize}px`, height: `${boardSize}px` }}>
         <div ref={boardRef} style={{ width: `${boardSize}px`, height: `${boardSize}px` }} />
+        {visiblePromotion && (
+          <div className="cg-promotion-picker" role="dialog" aria-label="Choose promotion piece">
+            {(['q', 'r', 'b', 'n'] as const).map(piece => (
+              <button
+                key={piece}
+                type="button"
+                className="cg-promotion-option"
+                onClick={() => choosePromotion(piece)}
+                aria-label={`Promote to ${piece === 'q' ? 'queen' : piece === 'r' ? 'rook' : piece === 'b' ? 'bishop' : 'knight'}`}
+              >
+                {piece.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        )}
         {annotation && annotationPosition && (
           <div
             className={`cg-annotation-glyph ${annotationClass}`}
