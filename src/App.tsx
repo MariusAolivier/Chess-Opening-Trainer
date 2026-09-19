@@ -173,6 +173,7 @@ function App() {
     if (!syncUser) return
 
     try {
+      setSyncStatus('syncing')
       const activityDay = reviewDayKey()
       const localActivity = loadReviewActivity().find(activity => activity.day === activityDay)
       await Promise.all([
