@@ -372,6 +372,13 @@ export async function uploadReviewActivity(userId: string, deleteMissing = true)
   await commitOperations(operations)
 }
 
+export async function uploadProgress(userId: string): Promise<void> {
+  await Promise.all([
+    uploadScores(userId),
+    uploadForkMainlines(userId, false),
+  ])
+}
+
 export async function incrementRemoteReviewActivity(
   userId: string,
   localRecord: ReviewActivityRecord,
@@ -674,18 +681,23 @@ export function subscribeToStudiesAndMainlines(
   createReconcileGuard?: () => () => boolean,
 ): () => void {
   let generation = 0
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null
   const beginReconcile = createReconcileGuard ?? (() => {
     const run = ++generation
     return () => shouldApply() && run === generation
   })
 
   const refresh = () => {
-    const runShouldApply = beginReconcile()
-    void fetchAndMerge(userId, runShouldApply)
-      .then(() => {
-        if (runShouldApply()) onChange(loadStudies())
-      })
-      .catch(onError)
+    if (refreshTimer !== null) return
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null
+      const runShouldApply = beginReconcile()
+      void fetchAndMerge(userId, runShouldApply)
+        .then(() => {
+          if (runShouldApply()) onChange(loadStudies())
+        })
+        .catch(onError)
+    }, 0)
   }
 
   const unsubscribeStudies = onSnapshot(
@@ -700,6 +712,10 @@ export function subscribeToStudiesAndMainlines(
   )
 
   return () => {
+    if (refreshTimer !== null) {
+      clearTimeout(refreshTimer)
+      refreshTimer = null
+    }
     unsubscribeStudies()
     unsubscribeMainlines()
   }

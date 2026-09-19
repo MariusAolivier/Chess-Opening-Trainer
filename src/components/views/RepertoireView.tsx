@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { StoredStudy } from '../../lib/storage'
 import type { ConflictInfo } from '../../lib/scores'
+import { KnightIcon, SettingsIcon, StreakIcon } from '../Icons'
 import RepertoirePanel from '../RepertoirePanel'
 import InsightsView from './InsightsView'
 import './RepertoireView.css'
@@ -132,7 +133,7 @@ export default function RepertoireView({
           <div className="rv-actions">
             <div ref={streakPanelRef} className="rv-streak-wrap">
               <button onClick={() => setShowStreakPanel(open => !open)} aria-label="Toggle streak details" className="rv-streak-btn">
-                <img src={import.meta.env.BASE_URL + 'streak-icon.png'} alt="" aria-hidden="true" className="rv-streak-icon" />
+                <StreakIcon className="rv-streak-icon" />
                 <span>{streak.current}</span>
               </button>
               {showStreakPanel && (
@@ -160,7 +161,7 @@ export default function RepertoireView({
                 title="Settings"
                 className="rv-settings-btn"
               >
-                <img src={import.meta.env.BASE_URL + 'settings-icon.png'} alt="" aria-hidden="true" className="rv-settings-icon" />
+                <SettingsIcon className="rv-settings-icon" />
               </button>
               {showSettingsPanel && (
                 <div className="rv-settings-panel">
@@ -316,12 +317,7 @@ export default function RepertoireView({
             disabled={lichessSyncing}
             className={`rv-lichess-sync-btn ${lichessSyncing ? 'rv-lichess-sync-btn-disabled' : ''}`}
           >
-            <img
-              src={import.meta.env.BASE_URL + 'lichess.png'}
-              alt=""
-              aria-hidden="true"
-              className="rv-lichess-icon"
-            />
+            <KnightIcon className="rv-lichess-icon" />
             <span>{lichessSyncing ? 'Syncing Lichess...' : 'Sync with Lichess'}</span>
           </button>
           {lichessUsername && (

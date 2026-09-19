@@ -122,6 +122,7 @@
   position: relative;
   top: -2px;
   left: 0;
+  color: currentColor;
 }
 
 .rv-streak-panel {
@@ -185,6 +186,7 @@
   width: 23px;
   height: 23px;
   display: block;
+  color: currentColor;
 }
 
 .rv-settings-panel {
@@ -442,6 +444,7 @@
   width: 16px;
   height: 16px;
   display: block;
+  color: #111;
 }
 
 .rv-lichess-user {

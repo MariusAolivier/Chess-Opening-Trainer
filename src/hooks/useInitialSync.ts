@@ -5,8 +5,7 @@ import {
   subscribeToReviewActivity,
   subscribeToScores,
   subscribeToStudiesAndMainlines,
-  uploadForkMainlines,
-  uploadScores,
+  uploadProgress,
 } from '../lib/sync'
 import { clearStudies, loadStudies, type StoredStudy } from '../lib/storage'
 import {
@@ -54,6 +53,7 @@ export function useInitialSync({
     let initialFetchSettled = false
     let snapshotRecovered = false
     let fullReconcileGeneration = 0
+    let unsubscribeProgress = () => {}
     const createFullReconcileGuard = () => {
       const run = ++fullReconcileGeneration
       return () => (
@@ -73,14 +73,15 @@ export function useInitialSync({
         }
         initialFetchSettled = true
         const mergedStudies = loadStudies()
-        const migrated = migrateLegacyChapterIdsForStudies(mergedStudies)
-        setSyncStatus('ok')
-        setSyncError(null)
+        migrateLegacyChapterIdsForStudies(mergedStudies)
         setLocalSyncOwner(userId)
         setStoredStudies(mergedStudies)
-        if (migrated) {
-          await Promise.all([uploadScores(userId), uploadForkMainlines(userId)])
-        }
+        if (!shouldApply()) return
+        await uploadProgress(userId)
+        if (cancelled) return
+        setSyncStatus('ok')
+        setSyncError(null)
+        subscribeToProgress()
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -112,36 +113,44 @@ export function useInitialSync({
 
     const shouldApply = () => !cancelled && getLocalSyncOwner() === userId
 
-    const unsubScores = subscribeToScores(userId, () => {
-      const studies = loadStudies()
-      const migrated = migrateLegacyChapterIdsForStudies(studies)
-      if (migrated) {
-        void Promise.all([uploadScores(userId), uploadForkMainlines(userId)]).catch(handleSubscriptionError)
-      }
-    }, handleSubscriptionError, shouldApply)
+    const subscribeToProgress = () => {
+      if (cancelled) return
 
-    const unsubReviewActivity = subscribeToReviewActivity(
-      userId,
-      () => {},
-      handleSubscriptionError,
-      shouldApply,
-    )
-    const unsubStudies = subscribeToStudiesAndMainlines(
-      userId,
-      studies => {
-        setStoredStudies(studies)
-        handleRecoveredSync()
-      },
-      handleSubscriptionError,
-      shouldApply,
-      createFullReconcileGuard,
-    )
+      const unsubScores = subscribeToScores(userId, () => {
+        const studies = loadStudies()
+        const migrated = migrateLegacyChapterIdsForStudies(studies)
+        if (migrated) {
+          void uploadProgress(userId).catch(handleSubscriptionError)
+        }
+      }, handleSubscriptionError, shouldApply)
+
+      const unsubReviewActivity = subscribeToReviewActivity(
+        userId,
+        () => {},
+        handleSubscriptionError,
+        shouldApply,
+      )
+      const unsubStudies = subscribeToStudiesAndMainlines(
+        userId,
+        studies => {
+          setStoredStudies(studies)
+          handleRecoveredSync()
+        },
+        handleSubscriptionError,
+        shouldApply,
+        createFullReconcileGuard,
+      )
+
+      unsubscribeProgress = () => {
+        unsubScores()
+        unsubReviewActivity()
+        unsubStudies()
+      }
+    }
 
     return () => {
       cancelled = true
-      unsubScores()
-      unsubReviewActivity()
-      unsubStudies()
+      unsubscribeProgress()
     }
   }, [migrateLegacyChapterIdsForStudies, setStoredStudies, setSyncError, setSyncStatus, userId])
 }
