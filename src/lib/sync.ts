@@ -6,10 +6,10 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  Timestamp,
   writeBatch,
   type DocumentData,
-  type QuerySnapshot,
-  type Timestamp,
+  type DocumentReference,
   type WriteBatch,
 } from 'firebase/firestore'
 import { db } from './firebase'
@@ -27,8 +27,92 @@ import {
   loadScores,
   remapChapterIds,
   replaceAllScores,
+  restoreLocalDeviceReviewCount,
   scoreRecency,
 } from './scores'
+import { assertSyncAvailable, runSyncOperation } from './syncQuota'
+
+type SyncCollection = 'studies' | 'scores' | 'forkMainlines' | 'reviewActivity'
+
+interface SyncDocument {
+  id: string
+  ref: DocumentReference
+  data: () => DocumentData
+}
+
+interface SyncSnapshot {
+  docs: SyncDocument[]
+  empty: boolean
+}
+
+interface CachedCollection {
+  complete: boolean
+  documents: Map<string, { ref: DocumentReference; data: DocumentData }>
+}
+
+const remoteCache = new Map<string, Map<SyncCollection, CachedCollection>>()
+
+function cachedCollection(userId: string, name: SyncCollection): CachedCollection {
+  let userCache = remoteCache.get(userId)
+  if (!userCache) {
+    userCache = new Map()
+    remoteCache.set(userId, userCache)
+  }
+  let cached = userCache.get(name)
+  if (!cached) {
+    cached = { complete: false, documents: new Map() }
+    userCache.set(name, cached)
+  }
+  return cached
+}
+
+function rememberSnapshot(userId: string, name: SyncCollection, snapshot: SyncSnapshot): void {
+  const cached = cachedCollection(userId, name)
+  cached.complete = true
+  cached.documents = new Map(snapshot.docs.map(item => [item.id, { ref: item.ref, data: item.data() }]))
+}
+
+function cachedSnapshot(userId: string, name: SyncCollection): SyncSnapshot | null {
+  const cached = cachedCollection(userId, name)
+  if (!cached.complete) return null
+  return {
+    docs: [...cached.documents].map(([id, entry]) => ({ id, ref: entry.ref, data: () => entry.data })),
+    empty: cached.documents.size === 0,
+  }
+}
+
+function rememberWrite(userId: string, name: SyncCollection, target: DocumentReference, data: DocumentData): void {
+  cachedCollection(userId, name).documents.set(target.id, { ref: target, data })
+}
+
+async function remoteSnapshot(userId: string, name: SyncCollection): Promise<SyncSnapshot> {
+  const cached = cachedSnapshot(userId, name)
+  if (cached) return cached
+  const snapshot = await getDocs(collection(db, 'users', userId, name))
+  rememberSnapshot(userId, name, snapshot)
+  return snapshot
+}
+
+async function forEachConcurrent<T>(items: T[], operation: (item: T) => Promise<void>): Promise<void> {
+  for (let offset = 0; offset < items.length; offset += 20) {
+    await Promise.all(items.slice(offset, offset + 20).map(operation))
+  }
+}
+
+function sameScore(left: ScoreRecord, right: ScoreRecord): boolean {
+  return left.chapterId === right.chapterId && left.lineId === right.lineId &&
+    left.displaySan === right.displaySan && left.ease === right.ease &&
+    left.interval === right.interval && left.dueDate === right.dueDate &&
+    left.lastReviewedAt === right.lastReviewedAt
+}
+
+function storedScore(data: FirestoreScore & Partial<ScoreRecord>): ScoreRecord | undefined {
+  return data.record ?? (
+    typeof data.chapterId === 'string' && typeof data.lineId === 'string'
+      ? data as ScoreRecord
+      : undefined
+  )
+}
 
 type FirestoreStudy = {
   id: string
@@ -93,9 +177,10 @@ function reviewActivityDocumentId(day: string, deviceId: string): string {
   return stableDocumentId(`${day}\u0000${deviceId}`)
 }
 
-async function commitOperations(operations: Array<(batch: WriteBatch) => void>): Promise<void> {
+async function commitOperations(userId: string, operations: Array<(batch: WriteBatch) => void>): Promise<void> {
   const batchSize = 400
   for (let offset = 0; offset < operations.length; offset += batchSize) {
+    assertSyncAvailable(userId)
     const batch = writeBatch(db)
     operations.slice(offset, offset + batchSize).forEach(operation => operation(batch))
     await batch.commit()
@@ -247,9 +332,14 @@ function collapseRemoteScoreRecords(records: ScoreRecord[]): ScoreRecord[] {
   })
 }
 
-export async function uploadStudy(userId: string, study: StoredStudy): Promise<void> {
+export function uploadStudy(userId: string, study: StoredStudy): Promise<void> {
+  return runSyncOperation(userId, () => uploadStudyRecord(userId, study))
+}
+
+async function uploadStudyRecord(userId: string, study: StoredStudy): Promise<void> {
   const target = studyDoc(userId, study.id)
-  await runTransaction(db, async transaction => {
+  const encoded = encodeStudy(study)
+  const written = await runTransaction(db, async transaction => {
     const existing = await transaction.get(target)
     if (existing.exists()) {
       const data = existing.data() as FirestoreStudy
@@ -258,107 +348,147 @@ export async function uploadStudy(userId: string, study: StoredStudy): Promise<v
       if (deletedAt !== undefined && localUpdatedAt <= deletedAt) return false
       const remoteUpdatedAt = data.updatedAt ? Date.parse(data.updatedAt) : 0
       if (remoteUpdatedAt > localUpdatedAt) return false
+      if (!data.deletedAt && data.name === encoded.name && data.playerColor === encoded.playerColor &&
+        data.chaptersJson === encoded.chaptersJson && data.updatedAt === encoded.updatedAt) return false
     }
-    transaction.set(target, encodeStudy(study))
+    transaction.set(target, encoded)
     return true
   })
+  if (written) rememberWrite(userId, 'studies', target, encoded)
 }
 
-export async function deleteStudyRemote(userId: string, studyId: string, studyName?: string): Promise<void> {
+export function deleteStudyRemote(userId: string, studyId: string, studyName?: string): Promise<void> {
+  return runSyncOperation(userId, () => deleteStudyRecords(userId, studyId, studyName))
+}
+
+async function deleteStudyRecords(userId: string, studyId: string, studyName?: string): Promise<void> {
   const ids = new Set([studyId])
   if (studyName) {
     const normalizedName = normalizeStudyName(studyName)
-    const snapshot = await getDocs(studiesCollection(userId))
+    const snapshot = await remoteSnapshot(userId, 'studies')
     snapshot.docs.forEach(item => {
       const data = item.data() as FirestoreStudy
       if (typeof data.name === 'string' && normalizeStudyName(data.name) === normalizedName) ids.add(item.id)
     })
   }
-  await Promise.all([...ids].map(id => setDoc(
-    studyDoc(userId, id),
-    { deletedAt: serverTimestamp() },
-  )))
+  await forEachConcurrent([...ids], async id => {
+    assertSyncAvailable(userId)
+    const existing = cachedCollection(userId, 'studies').documents.get(id)?.data as FirestoreStudy | undefined
+    if (existing?.deletedAt && !existing.mergedInto) return
+    const target = studyDoc(userId, id)
+    await setDoc(target, { deletedAt: serverTimestamp() })
+    rememberWrite(userId, 'studies', target, { deletedAt: Timestamp.now() })
+  })
 }
 
-export async function uploadScore(userId: string, record: ScoreRecord): Promise<void> {
+export function uploadScore(userId: string, record: ScoreRecord): Promise<void> {
+  return runSyncOperation(userId, () => uploadScoreRecord(userId, record))
+}
+
+async function uploadScoreRecord(userId: string, record: ScoreRecord): Promise<void> {
   const target = doc(scoresCollection(userId), scoreDocumentId(record))
-  await runTransaction(db, async transaction => {
+  const cached = cachedCollection(userId, 'scores').documents.get(target.id)?.data as FirestoreScore | undefined
+  if (cached?.deletedAt && scoreRecency(record) <= cached.deletedAt.toMillis()) return
+  const cachedRecord = cached ? storedScore(cached) : undefined
+  if (cachedRecord && (sameScore(cachedRecord, record) || scoreRecency(cachedRecord) > scoreRecency(record))) return
+  const result = await runTransaction(db, async transaction => {
     const snapshot = await transaction.get(target)
     if (snapshot.exists()) {
       const data = snapshot.data() as FirestoreScore & Partial<ScoreRecord>
       const deletedAt = data.deletedAt?.toMillis()
-      if (deletedAt !== undefined && scoreRecency(record) <= deletedAt) return
-      const remoteRecord = data.record ?? (
-        typeof data.chapterId === 'string' && typeof data.lineId === 'string'
-          ? data as ScoreRecord
-          : undefined
-      )
-      if (remoteRecord && scoreRecency(remoteRecord) > scoreRecency(record)) return
+      if (deletedAt !== undefined && scoreRecency(record) <= deletedAt) return data
+      const remoteRecord = storedScore(data)
+      if (remoteRecord && (sameScore(remoteRecord, record) || scoreRecency(remoteRecord) > scoreRecency(record))) return data
     }
     transaction.set(target, { record })
+    return { record }
   })
+  rememberWrite(userId, 'scores', target, result)
 }
 
-export async function uploadScores(userId: string, deleteMissing = false): Promise<void> {
+export function uploadScores(userId: string, deleteMissing = false): Promise<void> {
+  return runSyncOperation(userId, () => uploadScoreRecords(userId, deleteMissing))
+}
+
+async function uploadScoreRecords(userId: string, deleteMissing: boolean): Promise<void> {
   const records = loadScores()
-  await Promise.all(records.map(record => uploadScore(userId, record)))
+  await forEachConcurrent(records, record => uploadScore(userId, record))
   if (!deleteMissing) return
 
   const desiredIds = new Set(records.map(scoreDocumentId))
-  const snapshot = await getDocs(scoresCollection(userId))
-  const operations = snapshot.docs
-    .filter(existing => !desiredIds.has(existing.id))
-    .map(existing => (batch: WriteBatch) => {
-      batch.set(existing.ref, { deletedAt: serverTimestamp() })
-    })
-  await commitOperations(operations)
+  const snapshot = await remoteSnapshot(userId, 'scores')
+  const missing = snapshot.docs.filter(existing => !desiredIds.has(existing.id) && !existing.data().deletedAt)
+  await commitOperations(userId, missing.map(existing => batch => {
+    batch.set(existing.ref, { deletedAt: serverTimestamp() })
+  }))
+  missing.forEach(existing => rememberWrite(userId, 'scores', existing.ref, { deletedAt: Timestamp.now() }))
 }
 
-export async function uploadForkMainlines(userId: string, deleteMissing = true): Promise<void> {
+export function uploadForkMainlines(userId: string, deleteMissing = true): Promise<void> {
+  return runSyncOperation(userId, () => uploadForkMainlineRecords(userId, deleteMissing))
+}
+
+async function uploadForkMainlineRecords(userId: string, deleteMissing: boolean): Promise<void> {
   const records = exportForkMainlines()
   const reference = forkMainlinesCollection(userId)
-  const operations = records.map(record => (batch: WriteBatch) => {
+  const snapshot = await remoteSnapshot(userId, 'forkMainlines')
+  const remoteById = new Map(snapshot.docs.map(item => [item.id, item.data() as FirestoreForkMainline]))
+  const uploads = records.filter(record => {
+    const existing = remoteById.get(forkMainlineDocumentId(record))
+    if (existing?.deletedAt && forkMainlineRecency(record) <= existing.deletedAt.toMillis()) return false
+    if (existing?.record && (
+      existing.record.mainlineSan === record.mainlineSan ||
+      forkMainlineRecency(existing.record) > forkMainlineRecency(record)
+    )) return false
+    return true
+  })
+  const operations = uploads.map(record => (batch: WriteBatch) => {
     batch.set(doc(reference, forkMainlineDocumentId(record)), { record })
   })
+  const deleted: SyncDocument[] = []
   if (deleteMissing) {
     const desiredIds = new Set(records.map(forkMainlineDocumentId))
-    const snapshot = await getDocs(reference)
     snapshot.docs.forEach(existing => {
-      if (!desiredIds.has(existing.id)) {
+      if (!desiredIds.has(existing.id) && !existing.data().deletedAt) {
         operations.push(batch => batch.set(existing.ref, { deletedAt: serverTimestamp() }))
+        deleted.push(existing)
       }
     })
   }
-  await commitOperations(operations)
+  await commitOperations(userId, operations)
+  uploads.forEach(record => rememberWrite(userId, 'forkMainlines', doc(reference, forkMainlineDocumentId(record)), { record }))
+  deleted.forEach(existing => rememberWrite(userId, 'forkMainlines', existing.ref, { deletedAt: Timestamp.now() }))
 }
 
-export async function uploadReviewActivity(userId: string, deleteMissing = true): Promise<void> {
+export function uploadReviewActivity(userId: string, deleteMissing = true): Promise<void> {
+  return runSyncOperation(userId, () => uploadReviewActivityRecords(userId, deleteMissing))
+}
+
+async function uploadReviewActivityRecords(userId: string, deleteMissing: boolean): Promise<void> {
   const records = loadReviewActivity()
-  const reference = reviewActivityCollection(userId)
   const deviceId = getReviewDeviceId()
-  const operations = records.map(record => (batch: WriteBatch) => {
-    const counter: RemoteReviewActivityCounter = {
-      day: record.day,
-      deviceId,
-      count: Math.max(getLocalDeviceReviewCount(record.day), record.count),
-      updatedAt: record.updatedAt ?? new Date().toISOString(),
-    }
-    batch.set(doc(reference, reviewActivityDocumentId(record.day, deviceId)), { record: counter })
-  })
+  await forEachConcurrent(records, record => syncRemoteDeviceReviewActivity(userId, record))
+  const operations: Array<(batch: WriteBatch) => void> = []
+  const deleted: Array<{ document: SyncDocument; day: string }> = []
 
   if (deleteMissing) {
     const desiredIds = new Set(records.map(record => reviewActivityDocumentId(record.day, deviceId)))
-    const snapshot = await getDocs(reference)
+    const snapshot = await remoteSnapshot(userId, 'reviewActivity')
     snapshot.docs.forEach(existing => {
-      if (!desiredIds.has(existing.id)) {
+      if (!desiredIds.has(existing.id) && !existing.data().deletedAt) {
         const data = existing.data() as FirestoreReviewActivity
         const day = data.record?.day ?? data.day
+        if (!day) throw new Error('Cannot reset cloud review activity with a missing day.')
         operations.push(batch => batch.set(existing.ref, { day, deletedAt: serverTimestamp() }))
+        deleted.push({ document: existing, day })
       }
     })
   }
 
-  await commitOperations(operations)
+  await commitOperations(userId, operations)
+  deleted.forEach(({ document, day }) => rememberWrite(userId, 'reviewActivity', document.ref, {
+    day, deletedAt: Timestamp.now(),
+  }))
 }
 
 export async function uploadProgress(userId: string): Promise<void> {
@@ -372,22 +502,25 @@ export async function incrementRemoteReviewActivity(
   userId: string,
   localRecord: ReviewActivityRecord,
 ): Promise<void> {
-  await syncRemoteDeviceReviewActivity(userId, localRecord, true)
+  await runSyncOperation(userId, () => syncRemoteDeviceReviewActivity(userId, localRecord))
 }
 
 async function syncRemoteDeviceReviewActivity(
   userId: string,
   localRecord: ReviewActivityRecord,
-  isNewReview: boolean,
 ): Promise<void> {
+  assertSyncAvailable(userId)
   const { day } = localRecord
   const deviceId = getReviewDeviceId()
   const localDeviceCount = getLocalDeviceReviewCount(day)
+  if (localDeviceCount === 0) return
   const target = doc(
     reviewActivityCollection(userId),
     reviewActivityDocumentId(day, deviceId),
   )
-  await runTransaction(db, async transaction => {
+  const cached = cachedCollection(userId, 'reviewActivity').documents.get(target.id)?.data as FirestoreReviewActivity | undefined
+  if (cached?.record && 'deviceId' in cached.record && cached.record.count >= localDeviceCount) return
+  const result = await runTransaction(db, async transaction => {
     const snapshot = await transaction.get(target)
     const data = snapshot.data() as FirestoreReviewActivity | undefined
     const remote = data?.record && 'deviceId' in data.record
@@ -395,33 +528,45 @@ async function syncRemoteDeviceReviewActivity(
       : undefined
     const deletedAt = data?.deletedAt?.toMillis()
     const localIsAfterReset = deletedAt === undefined || activityRecency(localRecord) > deletedAt
-    if (!localIsAfterReset) return
+    if (!localIsAfterReset) return data
     const remoteCount = remote?.count ?? 0
-    const count = isNewReview
-      ? Math.max(remoteCount + 1, localDeviceCount)
-      : Math.max(remoteCount, localDeviceCount)
-    transaction.set(target, {
+    if (remoteCount >= localDeviceCount) return data
+    const result = {
       record: {
         day,
         deviceId,
-        count,
+        count: localDeviceCount,
         updatedAt: localRecord.updatedAt ?? new Date().toISOString(),
       } satisfies RemoteReviewActivityCounter,
-    })
+    }
+    transaction.set(target, result)
+    return result
   })
+  if (result) rememberWrite(userId, 'reviewActivity', target, result)
 }
 
-export async function fetchAndMerge(
+export function fetchAndMerge(
   userId: string,
   shouldApply: () => boolean = () => true,
 ): Promise<boolean> {
-  const [studiesSnapshot, scoresSnapshot, forkSnapshot, activitySnapshot] = await Promise.all([
-    getDocs(studiesCollection(userId)),
-    getDocs(scoresCollection(userId)),
-    getDocs(forkMainlinesCollection(userId)),
-    getDocs(reviewActivityCollection(userId)),
-  ])
+  return runSyncOperation(userId, async () => {
+    const snapshots = await Promise.all([
+      getDocs(studiesCollection(userId)),
+      getDocs(scoresCollection(userId)),
+      getDocs(forkMainlinesCollection(userId)),
+      getDocs(reviewActivityCollection(userId)),
+    ])
+    const names: SyncCollection[] = ['studies', 'scores', 'forkMainlines', 'reviewActivity']
+    snapshots.forEach((snapshot, index) => rememberSnapshot(userId, names[index], snapshot))
+    return reconcileSnapshots(userId, snapshots, shouldApply)
+  })
+}
 
+async function reconcileSnapshots(
+  userId: string,
+  [studiesSnapshot, scoresSnapshot, forkSnapshot, activitySnapshot]: SyncSnapshot[],
+  shouldApply: () => boolean,
+): Promise<boolean> {
   if (!shouldApply()) return false
   let changed = false
   let chapterRemap = new Map<string, string>()
@@ -472,7 +617,7 @@ export async function fetchAndMerge(
       studiesToUpload.push(study)
     })
 
-    await Promise.all(studiesToUpload.map(study => uploadStudy(userId, study)))
+    await forEachConcurrent(studiesToUpload, study => uploadStudy(userId, study))
     if (!shouldApply()) return false
 
     const remoteStudies = [...reconciledStudies.values()]
@@ -536,10 +681,13 @@ export async function fetchAndMerge(
   changed = changed || !forkSnapshot.empty
 
   // Keep duplicate study metadata so later devices can migrate their original chapter IDs.
-  await Promise.all(studyRedirects.map(({ study, targetId }) => setDoc(
-    studyDoc(userId, study.id),
-    { ...encodeStudy(study), mergedInto: targetId, deletedAt: serverTimestamp() },
-  )))
+  await forEachConcurrent(studyRedirects, async ({ study, targetId }) => {
+    assertSyncAvailable(userId)
+    const target = studyDoc(userId, study.id)
+    const data = { ...encodeStudy(study), mergedInto: targetId }
+    await setDoc(target, { ...data, deletedAt: serverTimestamp() })
+    rememberWrite(userId, 'studies', target, { ...data, deletedAt: Timestamp.now() })
+  })
   if (!shouldApply()) return false
 
   await reconcileReviewActivitySnapshot(userId, activitySnapshot, shouldApply)
@@ -557,7 +705,7 @@ function forkMainlineRecency(record: ForkMainlineRecord): number {
 
 async function reconcileForkMainlineSnapshot(
   userId: string,
-  snapshot: QuerySnapshot<DocumentData, DocumentData>,
+  snapshot: SyncSnapshot,
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
   if (!shouldApply()) return
@@ -583,7 +731,7 @@ async function reconcileForkMainlineSnapshot(
         : undefined
     )
     if (!remote) return
-    if (local && forkMainlineRecency(local) > forkMainlineRecency(remote)) {
+    if (local && local.mainlineSan !== remote.mainlineSan && forkMainlineRecency(local) > forkMainlineRecency(remote)) {
       merged.set(item.id, local)
       uploads.push(local)
     } else {
@@ -602,7 +750,8 @@ async function reconcileForkMainlineSnapshot(
     const operations = uploads.map(record => (batch: WriteBatch) => {
       batch.set(doc(reference, forkMainlineDocumentId(record)), { record })
     })
-    await commitOperations(operations)
+    await commitOperations(userId, operations)
+    uploads.forEach(record => rememberWrite(userId, 'forkMainlines', doc(reference, forkMainlineDocumentId(record)), { record }))
   }
 }
 
@@ -616,6 +765,7 @@ export function subscribeToScores(
   return onSnapshot(
     scoresCollection(userId),
     snapshot => {
+      rememberSnapshot(userId, 'scores', snapshot)
       const run = ++generation
       const runShouldApply = () => shouldApply() && run === generation
       void reconcileScoreSnapshot(userId, snapshot, runShouldApply)
@@ -630,7 +780,7 @@ export function subscribeToScores(
 
 async function reconcileScoreSnapshot(
   userId: string,
-  snapshot: QuerySnapshot<DocumentData, DocumentData>,
+  snapshot: SyncSnapshot,
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
   if (!shouldApply()) return
@@ -673,7 +823,7 @@ async function reconcileScoreSnapshot(
 
   if (!shouldApply()) return
   replaceAllScores(collapseRemoteScoreRecords([...merged.values()]))
-  await Promise.all(uploads.map(record => uploadScore(userId, record)))
+  await forEachConcurrent(uploads, record => uploadScore(userId, record))
 }
 
 export function subscribeToReviewActivity(
@@ -686,6 +836,7 @@ export function subscribeToReviewActivity(
   return onSnapshot(
     reviewActivityCollection(userId),
     snapshot => {
+      rememberSnapshot(userId, 'reviewActivity', snapshot)
       const run = ++generation
       const runShouldApply = () => shouldApply() && run === generation
       void reconcileReviewActivitySnapshot(userId, snapshot, runShouldApply)
@@ -707,36 +858,70 @@ export function subscribeToStudiesAndMainlines(
 ): () => void {
   let generation = 0
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
+  let refreshing = false
+  let pending = false
+  let stopped = false
   const beginReconcile = createReconcileGuard ?? (() => {
     const run = ++generation
     return () => shouldApply() && run === generation
   })
 
+  const reconcile = async () => {
+    refreshing = true
+    try {
+      while (pending && !stopped && shouldApply()) {
+        pending = false
+        const runShouldApply = beginReconcile()
+        await runSyncOperation(userId, async () => {
+          const snapshots = await Promise.all([
+            remoteSnapshot(userId, 'studies'),
+            remoteSnapshot(userId, 'scores'),
+            remoteSnapshot(userId, 'forkMainlines'),
+            remoteSnapshot(userId, 'reviewActivity'),
+          ])
+          await reconcileSnapshots(userId, snapshots, runShouldApply)
+        })
+        if (runShouldApply() && !stopped) onChange(loadStudies())
+      }
+    } catch (error) {
+      pending = false
+      onError(error instanceof Error ? error : new Error(String(error)))
+    } finally {
+      refreshing = false
+    }
+  }
+
   const refresh = () => {
-    if (refreshTimer !== null) return
+    if (stopped) return
+    pending = true
+    if (refreshTimer !== null || refreshing) return
     refreshTimer = setTimeout(() => {
       refreshTimer = null
-      const runShouldApply = beginReconcile()
-      void fetchAndMerge(userId, runShouldApply)
-        .then(() => {
-          if (runShouldApply()) onChange(loadStudies())
-        })
-        .catch(onError)
+      void reconcile()
     }, 0)
   }
 
   const unsubscribeStudies = onSnapshot(
     studiesCollection(userId),
-    refresh,
+    snapshot => {
+      rememberSnapshot(userId, 'studies', snapshot)
+      refresh()
+    },
     onError,
   )
   const unsubscribeMainlines = onSnapshot(
     forkMainlinesCollection(userId),
-    refresh,
+    snapshot => {
+      rememberSnapshot(userId, 'forkMainlines', snapshot)
+      refresh()
+    },
     onError,
   )
 
   return () => {
+    stopped = true
+    pending = false
+    generation += 1
     if (refreshTimer !== null) {
       clearTimeout(refreshTimer)
       refreshTimer = null
@@ -757,7 +942,7 @@ function activityRecency(record: ReviewActivityRecord): number {
 
 async function reconcileReviewActivitySnapshot(
   userId: string,
-  snapshot: QuerySnapshot<DocumentData, DocumentData>,
+  snapshot: SyncSnapshot,
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
   if (!shouldApply()) return
@@ -790,6 +975,7 @@ async function reconcileReviewActivitySnapshot(
     if (!storedRecord) return
     if ('deviceId' in storedRecord && storedRecord.deviceId === currentDeviceId) {
       currentDeviceRemoteCounts.set(storedRecord.day, storedRecord.count)
+      restoreLocalDeviceReviewCount(storedRecord.day, storedRecord.count)
     } else if (!('deviceId' in storedRecord)) {
       // Treat the legacy aggregate document as this device's seed to avoid duplicating it.
       currentDeviceRemoteCounts.set(
@@ -845,5 +1031,5 @@ async function reconcileReviewActivitySnapshot(
 
   if (!shouldApply()) return
   importReviewActivity([...merged.values()])
-  await Promise.all(deviceUploads.map(record => syncRemoteDeviceReviewActivity(userId, record, false)))
+  await forEachConcurrent(deviceUploads, record => syncRemoteDeviceReviewActivity(userId, record))
 }

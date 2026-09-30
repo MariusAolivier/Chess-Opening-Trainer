@@ -15,6 +15,7 @@ import {
   clearScores,
 } from '../lib/scores'
 import { getLocalSyncOwner, setLocalSyncOwner } from '../lib/auth'
+import { isSyncQuotaPaused, subscribeToQuotaPause, SyncQuotaError, syncOperationError } from '../lib/syncQuota'
 
 interface UseInitialSyncParams {
   userId: string | null
@@ -50,14 +51,19 @@ export function useInitialSync({
     setLocalSyncOwner(userId)
 
     let cancelled = false
-    let initialFetchSettled = false
-    let snapshotRecovered = false
     let fullReconcileGeneration = 0
     let unsubscribeProgress = () => {}
+    const unsubscribeQuotaPause = subscribeToQuotaPause(pausedUserId => {
+      if (cancelled || pausedUserId !== userId) return
+      unsubscribeProgress()
+      setSyncStatus('error')
+      setSyncError(new SyncQuotaError().message)
+    })
     const createFullReconcileGuard = () => {
       const run = ++fullReconcileGeneration
       return () => (
         !cancelled &&
+        !isSyncQuotaPaused(userId) &&
         getLocalSyncOwner() === userId &&
         run === fullReconcileGeneration
       )
@@ -68,29 +74,21 @@ export function useInitialSync({
       .then(async () => {
         if (cancelled) return
         if (!initialFetchShouldApply()) {
-          initialFetchSettled = true
           return
         }
-        initialFetchSettled = true
         const mergedStudies = loadStudies()
-        migrateLegacyChapterIdsForStudies(mergedStudies)
+        const migrated = migrateLegacyChapterIdsForStudies(mergedStudies)
         setLocalSyncOwner(userId)
         setStoredStudies(mergedStudies)
         if (!shouldApply()) return
-        await uploadProgress(userId)
-        if (cancelled) return
+        if (migrated) await uploadProgress(userId)
+        if (!shouldApply()) return
         setSyncStatus('ok')
         setSyncError(null)
         subscribeToProgress()
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        initialFetchSettled = true
-        if (snapshotRecovered) {
-          setSyncStatus('ok')
-          setSyncError(null)
-          return
-        }
         const message = err instanceof Error ? err.message : String(err)
         console.error('[sync] fetchAndMerge failed:', err)
         setSyncStatus('error')
@@ -99,22 +97,22 @@ export function useInitialSync({
 
     const handleSubscriptionError = (error: Error) => {
       if (cancelled) return
-      console.error('[sync] subscription failed:', error)
+      const normalized = syncOperationError(userId, error)
+      if (isSyncQuotaPaused(userId)) unsubscribeProgress()
+      console.error('[sync] subscription failed:', normalized)
       setSyncStatus('error')
-      setSyncError(error.message)
+      setSyncError(normalized.message)
     }
     const handleRecoveredSync = () => {
-      if (cancelled) return
-      snapshotRecovered = true
-      if (!initialFetchSettled) return
+      if (cancelled || isSyncQuotaPaused(userId)) return
       setSyncStatus('ok')
       setSyncError(null)
     }
 
-    const shouldApply = () => !cancelled && getLocalSyncOwner() === userId
+    const shouldApply = () => !cancelled && getLocalSyncOwner() === userId && !isSyncQuotaPaused(userId)
 
     const subscribeToProgress = () => {
-      if (cancelled) return
+      if (!shouldApply()) return
 
       const unsubScores = subscribeToScores(userId, () => {
         const studies = loadStudies()
@@ -151,6 +149,7 @@ export function useInitialSync({
     return () => {
       cancelled = true
       unsubscribeProgress()
+      unsubscribeQuotaPause()
     }
   }, [migrateLegacyChapterIdsForStudies, setStoredStudies, setSyncError, setSyncStatus, userId])
 }

@@ -150,4 +150,19 @@ describe('score persistence', () => {
       expect.objectContaining({ chapterId: 'chapter', forkFen: 'fork-fen' }),
     ])
   })
+
+  it('does not change timestamps when fork recommendations are unchanged', async () => {
+    const scores = await import('./scores')
+    scores.updateForkMainlines('chapter', new Map([['fork', 'e4']]))
+    const original = scores.exportForkMainlines()
+    vi.setSystemTime(new Date('2026-01-03T12:00:00Z'))
+
+    scores.updateForkMainlines('chapter', new Map([['fork', 'e4']]))
+
+    expect(scores.exportForkMainlines()).toEqual(original)
+    scores.updateForkMainlines('chapter', new Map([['fork', 'd4']]))
+    expect(scores.exportForkMainlines()[0]).toMatchObject({
+      mainlineSan: 'd4', updatedAt: '2026-01-03T12:00:00.000Z',
+    })
+  })
 })

@@ -7,22 +7,27 @@ interface Reference {
 }
 
 const remote = vi.hoisted(() => new Map<string, Record<string, unknown>>())
+const operations = vi.hoisted(() => ({ queries: 0, reads: 0, writes: 0, active: 0, maxActive: 0 }))
+const listeners = vi.hoisted(() => new Map<string, {
+  next: (snapshot: { docs: Array<{ id: string; ref: Reference; data: () => Record<string, unknown> }>; empty: boolean }) => void
+  error: (error: Error) => void
+}>())
 
 vi.mock('./firebase', () => ({ db: {} }))
 vi.mock('firebase/firestore', () => {
   const reference = (path: string): Reference => ({ path, id: path.split('/').at(-1) ?? '' })
-  const snapshot = (ref: Reference) => ({
-    id: ref.id,
-    ref,
-    exists: () => remote.has(ref.path),
-    data: () => remote.get(ref.path),
-  })
+  const snapshot = (ref: Reference) => {
+    const data = remote.get(ref.path)
+    return { id: ref.id, ref, exists: () => data !== undefined, data: () => data }
+  }
   return {
+    Timestamp: { now: () => ({ toMillis: () => Date.now() }) },
     collection: (_db: unknown, ...parts: string[]) => parts.join('/'),
     doc: (parent: unknown, ...parts: string[]) => reference(
       [typeof parent === 'string' ? parent : '', ...parts].filter(Boolean).join('/'),
     ),
     getDocs: vi.fn(async (collection: string) => {
+      operations.queries += 1
       const docs = [...remote.keys()]
         .filter(path => path.startsWith(`${collection}/`))
         .map(path => snapshot(reference(path)))
@@ -34,26 +39,53 @@ vi.mock('firebase/firestore', () => {
         get: (ref: Reference) => Promise<ReturnType<typeof snapshot>>
         set: (ref: Reference, data: Record<string, unknown>) => void
       }) => unknown,
-    ) => run({
-      get: async ref => snapshot(ref),
-      set: (ref, data) => { remote.set(ref.path, { ...data }) },
-    })),
+    ) => {
+      operations.active += 1
+      operations.maxActive = Math.max(operations.active, operations.maxActive)
+      try {
+        return await run({
+          get: async ref => { operations.reads += 1; return snapshot(ref) },
+          set: (ref, data) => { operations.writes += 1; remote.set(ref.path, { ...data }) },
+        })
+      } finally {
+        operations.active -= 1
+      }
+    }),
     setDoc: vi.fn(async (ref: Reference, data: Record<string, unknown>) => {
+      operations.writes += 1
       remote.set(ref.path, { ...data })
     }),
     writeBatch: () => {
-      const operations: Array<() => void> = []
+      const writes: Array<() => void> = []
       return {
         set: (ref: Reference, data: Record<string, unknown>) => {
-          operations.push(() => { remote.set(ref.path, { ...data }) })
+          writes.push(() => {
+            operations.writes += 1
+            remote.set(ref.path, { ...data })
+          })
         },
-        commit: async () => { operations.forEach(operation => operation()) },
+        commit: async () => { writes.forEach(operation => operation()) },
       }
     },
-    onSnapshot: vi.fn(() => vi.fn()),
+    onSnapshot: vi.fn((collection: string, next: (snapshot: {
+      docs: Array<{ id: string; ref: Reference; data: () => Record<string, unknown> }>
+      empty: boolean
+    }) => void, error: (error: Error) => void) => {
+      listeners.set(collection, { next, error })
+      return vi.fn(() => { listeners.delete(collection) })
+    }),
     serverTimestamp: () => ({ toMillis: () => Date.now() }),
   }
 })
+
+function emitCollection(name: string) {
+  const collection = `users/owner/${name}`
+  const docs = [...remote].filter(([path]) => path.startsWith(`${collection}/`)).map(([path, data]) => {
+    const id = path.split('/').at(-1) ?? ''
+    return { id, ref: { path, id }, data: () => data }
+  })
+  listeners.get(collection)?.next({ docs, empty: docs.length === 0 })
+}
 
 function useDeviceStorage() {
   const values = new Map<string, string>()
@@ -80,6 +112,8 @@ describe('cross-device progress merging', () => {
   beforeEach(() => {
     vi.resetModules()
     remote.clear()
+    listeners.clear()
+    Object.assign(operations, { queries: 0, reads: 0, writes: 0, active: 0, maxActive: 0 })
     useDeviceStorage()
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-03T12:00:00Z'))
@@ -219,5 +253,131 @@ describe('cross-device progress merging', () => {
 
     expect(scores.loadScores()).toEqual([])
     expect(remote.get(path)).not.toHaveProperty('record')
+  })
+
+  it('performs zero remote reads or writes when repeatedly flushing 1,000 unchanged scores and forks', async () => {
+    const sync = await import('./sync')
+    const scores = await import('./scores')
+    const records = Array.from({ length: 1000 }, (_, index) => ({ ...reviewed(), lineId: `main::leaf-${index}` }))
+    scores.replaceAllScores(records)
+    scores.importForkMainlines(records.map((_, index) => ({
+      chapterId: 'chapter', forkFen: `fork-${index}`, mainlineSan: 'e4', updatedAt: '2026-01-01T12:00:00.000Z',
+    })))
+    await sync.uploadProgress('owner')
+    expect(operations.maxActive).toBeLessThanOrEqual(20)
+    await sync.fetchAndMerge('owner')
+    Object.assign(operations, { queries: 0, reads: 0, writes: 0 })
+
+    for (let index = 0; index < 10; index += 1) await sync.uploadProgress('owner')
+    await sync.uploadScores('owner', true)
+    await sync.uploadForkMainlines('owner', true)
+
+    expect(operations).toMatchObject({ queries: 0, reads: 0, writes: 0 })
+  })
+
+  it('uses received study and fork snapshots without rereading any collections', async () => {
+    const sync = await import('./sync')
+    const scores = await import('./scores')
+    scores.updateForkMainlines('chapter', new Map([['fork', 'e4']]))
+    await sync.fetchAndMerge('owner')
+    Object.assign(operations, { queries: 0, reads: 0, writes: 0 })
+    const onChange = vi.fn()
+    const onError = vi.fn()
+    const unsubscribe = sync.subscribeToStudiesAndMainlines('owner', onChange, onError)
+
+    for (let index = 0; index < 10; index += 1) {
+      emitCollection('studies')
+      emitCollection('forkMainlines')
+      await vi.advanceTimersByTimeAsync(0)
+    }
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(onChange).toHaveBeenCalledTimes(10)
+    expect(operations).toMatchObject({ queries: 0, reads: 0, writes: 0 })
+    const forkPath = [...remote.keys()].find(path => path.includes('/forkMainlines/'))
+    if (!forkPath) throw new Error('Expected a synced fork recommendation.')
+    remote.set(forkPath, { record: {
+      chapterId: 'chapter', forkFen: 'fork', mainlineSan: 'd4', updatedAt: '2026-01-04T12:00:00.000Z',
+    } })
+    emitCollection('forkMainlines')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(scores.exportForkMainlines()[0].mainlineSan).toBe('d4')
+    expect(operations).toMatchObject({ queries: 0, reads: 0, writes: 0 })
+    unsubscribe()
+    expect(listeners.size).toBe(0)
+  })
+
+  it('writes only the reviewed score and device counter, and makes review retries idempotent', async () => {
+    const sync = await import('./sync')
+    const scores = await import('./scores')
+    scores.replaceAllScores(Array.from({ length: 1000 }, (_, index) => ({
+      ...reviewed(), lineId: `main::leaf-${index}`,
+    })))
+    await sync.uploadScores('owner')
+    await sync.fetchAndMerge('owner')
+    Object.assign(operations, { queries: 0, reads: 0, writes: 0 })
+    const record = scores.recordReview('chapter', 'main::leaf-0', 'Main line', 5)
+    const activity = scores.loadReviewActivity()[0]
+
+    await sync.uploadScore('owner', record)
+    await sync.incrementRemoteReviewActivity('owner', activity)
+    await sync.uploadScore('owner', record)
+    await sync.incrementRemoteReviewActivity('owner', activity)
+
+    expect(operations).toMatchObject({ queries: 0, reads: 2, writes: 2 })
+    const dailyCounter = [...remote].find(([path]) => path.includes('/reviewActivity/'))?.[1].record
+    expect(dailyCounter).toMatchObject({ count: 1 })
+  })
+
+  it('does not write repeated reset tombstones', async () => {
+    const sync = await import('./sync')
+    const scores = await import('./scores')
+    scores.replaceAllScores([reviewed()])
+    await sync.uploadScores('owner')
+    await sync.fetchAndMerge('owner')
+    scores.clearScores()
+    await sync.uploadScores('owner', true)
+    Object.assign(operations, { queries: 0, reads: 0, writes: 0 })
+
+    await sync.uploadScores('owner', true)
+
+    expect(operations).toMatchObject({ queries: 0, reads: 0, writes: 0 })
+  })
+
+  it('restores this device counter before adding new reviews after its account cache was cleared', async () => {
+    const sync = await import('./sync')
+    const scores = await import('./scores')
+    scores.recordReviewActivity()
+    scores.recordReviewActivity()
+    await sync.incrementRemoteReviewActivity('owner', scores.loadReviewActivity()[0])
+    scores.clearReviewActivity()
+
+    await sync.fetchAndMerge('owner')
+    scores.recordReviewActivity()
+    await sync.incrementRemoteReviewActivity('owner', scores.loadReviewActivity()[0])
+
+    expect(scores.loadReviewActivity()[0].count).toBe(3)
+    expect([...remote.values()][0].record).toMatchObject({ count: 3 })
+  })
+
+  it('keeps local progress and stops subsequent batches and retries after an SDK quota error', async () => {
+    const sync = await import('./sync')
+    const scores = await import('./scores')
+    const firestore = await import('firebase/firestore')
+    const records = Array.from({ length: 1000 }, (_, index) => ({ ...reviewed(), lineId: `main::leaf-${index}` }))
+    scores.replaceAllScores(records)
+    vi.mocked(firestore.runTransaction).mockRejectedValueOnce(
+      Object.assign(new Error('Quota exceeded'), { code: 'resource-exhausted' }),
+    )
+
+    await expect(sync.uploadScores('owner')).rejects.toThrow('saved on this device')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(operations.reads).toBeLessThanOrEqual(20)
+    expect(scores.loadScores()).toEqual(records)
+    Object.assign(operations, { queries: 0, reads: 0, writes: 0 })
+    await expect(sync.uploadProgress('owner')).rejects.toThrow('Cloud sync is paused')
+    await expect(sync.fetchAndMerge('owner')).rejects.toThrow('Cloud sync is paused')
+    expect(operations).toMatchObject({ queries: 0, reads: 0, writes: 0 })
   })
 })
