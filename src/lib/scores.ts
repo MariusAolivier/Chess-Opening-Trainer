@@ -402,11 +402,13 @@ export function deleteChapterScores(chapterId: string): void {
   saveForkMainlines(mainlines)
 }
 
-function scoreRecency(record: ScoreRecord): number {
+export function scoreRecency(record: ScoreRecord): number {
   const reviewedAt = record.lastReviewedAt ? Date.parse(record.lastReviewedAt) : Number.NaN
   if (!Number.isNaN(reviewedAt)) return reviewedAt
+  if (record.interval <= 0) return 0
+  // Legacy reviews have no timestamp; infer it from the scheduled interval.
   const dueAt = Date.parse(record.dueDate)
-  return Number.isNaN(dueAt) ? 0 : dueAt
+  return Number.isNaN(dueAt) ? 0 : dueAt - record.interval * 86_400_000
 }
 
 export function remapChapterIds(remap: Map<string, string>): boolean {
@@ -432,9 +434,11 @@ export function remapChapterIds(remap: Map<string, string>): boolean {
   }
 
   const originalMainlines = loadForkMainlines()
+  let mainlinesChanged = false
   const mainlinesById = new Map<string, ForkMainlineRecord>()
   originalMainlines.forEach(record => {
     const nextChapterId = remap.get(record.chapterId) ?? record.chapterId
+    if (nextChapterId !== record.chapterId) mainlinesChanged = true
     const nextRecord = nextChapterId === record.chapterId ? record : { ...record, chapterId: nextChapterId }
     const key = `${nextRecord.chapterId}||${nextRecord.forkFen}`
     if (!mainlinesById.has(key)) {
@@ -442,11 +446,11 @@ export function remapChapterIds(remap: Map<string, string>): boolean {
     }
   })
 
-  if (changed) {
+  if (mainlinesChanged) {
     saveForkMainlines([...mainlinesById.values()])
   }
 
-  return changed
+  return changed || mainlinesChanged
 }
 
 export function pruneStudyChapterIds(studyId: string, validChapterIds: Set<string>): number {

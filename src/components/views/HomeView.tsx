@@ -13,6 +13,7 @@ interface HomeViewProps {
   lichessSyncing: boolean
   syncUser: { displayName: string | null; email: string | null } | null
   syncAuthLoading: boolean
+  syncSigningIn: boolean
   onTrainNow: () => void
   onOpenRepertoire: () => void
   onSyncWithLichess: () => void
@@ -30,6 +31,7 @@ export default function HomeView({
   lichessSyncing,
   syncUser,
   syncAuthLoading,
+  syncSigningIn,
   onTrainNow,
   onOpenRepertoire,
   onSyncWithLichess,
@@ -46,6 +48,11 @@ export default function HomeView({
       {syncStatus === 'error' && (
         <div className="home-sync-error" role="alert">
           ✗ Something went wrong: {syncError}
+        </div>
+      )}
+      {syncUser && (
+        <div className="home-step-status home-step-status-complete">
+          Signed in as {syncUser.email ?? syncUser.displayName ?? 'Google account'}
         </div>
       )}
       {syncUser && syncStatus === 'syncing' && (
@@ -77,8 +84,14 @@ export default function HomeView({
                 </span>
               ) : (
                 <>
-                  <button type="button" onClick={onSignInToSync} className="home-google-btn">
-                    Sign in with Google
+                  <button
+                    type="button"
+                    onClick={onSignInToSync}
+                    disabled={syncSigningIn}
+                    aria-busy={syncSigningIn}
+                    className="home-google-btn"
+                  >
+                    {syncSigningIn ? 'Opening Google sign-in...' : 'Sign in with Google'}
                   </button>
                   <span className="home-step-note">Recommended, but you can train locally without it.</span>
                 </>
@@ -117,10 +130,17 @@ export default function HomeView({
         </section>
       ) : (
         <>
-          {!syncAuthLoading && !syncUser && (
+          {!syncUser && (
             <div className="home-cloud-prompt">
               <span><strong>Keep your progress safe.</strong> Sync privately across devices.</span>
-              <button type="button" onClick={onSignInToSync}>Sign in with Google</button>
+              <button
+                type="button"
+                onClick={onSignInToSync}
+                disabled={syncAuthLoading || syncSigningIn}
+                aria-busy={syncAuthLoading || syncSigningIn}
+              >
+                {syncAuthLoading ? 'Checking account...' : syncSigningIn ? 'Opening Google sign-in...' : 'Sign in with Google'}
+              </button>
             </div>
           )}
           <div className="home-stats-grid">
