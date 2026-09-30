@@ -156,6 +156,12 @@
   color: #1d1d1d;
 }
 
+.home-google-btn:disabled,
+.home-cloud-prompt button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .home-step-note,
 .home-step-status {
   color: #7f8ca6;

@@ -108,4 +108,46 @@ describe('score persistence', () => {
 
     expect(scores.getLocalDeviceReviewCount('2026-01-01')).toBe(2)
   })
+
+  it('does not replace reviewed progress with a newly initialized line when remapping chapters', async () => {
+    const scores = await import('./scores')
+    const reviewed = scores.recordReview('phone-chapter', 'line', 'Main line', 5)
+    vi.setSystemTime(new Date('2026-01-02T12:00:00Z'))
+    scores.initScore('laptop-chapter', 'line', 'Main line')
+
+    scores.remapChapterIds(new Map([['phone-chapter', 'laptop-chapter']]))
+
+    expect(scores.loadScores()).toEqual([{ ...reviewed, chapterId: 'laptop-chapter' }])
+  })
+
+  it('compares review timestamps rather than next due dates for legacy records', async () => {
+    const scores = await import('./scores')
+    const older = {
+      chapterId: 'chapter',
+      lineId: 'line',
+      displaySan: 'Main line',
+      ease: 2.5,
+      interval: 30,
+      dueDate: '2026-01-31T12:00:00.000Z',
+    }
+    const newer = {
+      ...older,
+      interval: 1,
+      dueDate: '2026-01-03T12:00:00.000Z',
+      lastReviewedAt: '2026-01-02T12:00:00.000Z',
+    }
+
+    expect(scores.scoreRecency(newer)).toBeGreaterThan(scores.scoreRecency(older))
+    expect(scores.scoreRecency({ ...older, interval: 0 })).toBe(0)
+  })
+
+  it('remaps fork-only progress even when there are no score records', async () => {
+    const scores = await import('./scores')
+    scores.updateForkMainlines('old-chapter', new Map([['fork-fen', 'e4']]))
+
+    expect(scores.remapChapterIds(new Map([['old-chapter', 'chapter']]))).toBe(true)
+    expect(scores.exportForkMainlines()).toEqual([
+      expect.objectContaining({ chapterId: 'chapter', forkFen: 'fork-fen' }),
+    ])
+  })
 })

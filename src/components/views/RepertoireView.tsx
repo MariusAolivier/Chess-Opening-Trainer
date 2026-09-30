@@ -32,6 +32,9 @@ interface RepertoireViewProps {
   lichessUsername: string | null
   syncUser: { displayName: string | null; email: string | null } | null
   syncAuthLoading: boolean
+  syncSigningIn: boolean
+  syncStatus: 'idle' | 'syncing' | 'ok' | 'error'
+  syncError: string | null
   onSyncWithLichess: () => void
   onSignInToSync: () => void
   onSignOutOfSync: () => void
@@ -72,6 +75,9 @@ export default function RepertoireView({
   lichessUsername,
   syncUser,
   syncAuthLoading,
+  syncSigningIn,
+  syncStatus,
+  syncError,
   onSyncWithLichess,
   onSignInToSync,
   onSignOutOfSync,
@@ -172,16 +178,31 @@ export default function RepertoireView({
                     ) : syncUser ? (
                       <>
                         <span className="rv-sync-account-status">
-                          {syncUser.displayName ?? syncUser.email ?? 'Google account'}
+                          Signed in as {syncUser.email ?? syncUser.displayName ?? 'Google account'}
                         </span>
                         <button type="button" onClick={onSignOutOfSync} className="rv-sync-account-btn">
                           Sign out
                         </button>
                       </>
                     ) : (
-                      <button type="button" onClick={onSignInToSync} className="rv-sync-account-btn">
-                        Sign in with Google
+                      <button
+                        type="button"
+                        onClick={onSignInToSync}
+                        disabled={syncSigningIn}
+                        aria-busy={syncSigningIn}
+                        className="rv-sync-account-btn"
+                      >
+                        {syncSigningIn ? 'Opening Google sign-in...' : 'Sign in with Google'}
                       </button>
+                    )}
+                    {syncUser && syncStatus === 'syncing' && (
+                      <span className="rv-sync-account-status" role="status">Syncing progress...</span>
+                    )}
+                    {syncUser && syncStatus === 'ok' && (
+                      <span className="rv-sync-account-status" role="status">Progress synced</span>
+                    )}
+                    {syncStatus === 'error' && syncError && (
+                      <span className="rv-error" role="alert">{syncError}</span>
                     )}
                   </div>
                   <label className="rv-sound-label">

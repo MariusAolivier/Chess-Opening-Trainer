@@ -1,8 +1,6 @@
 import {
   GoogleAuthProvider,
-  browserLocalPersistence,
   onAuthStateChanged,
-  setPersistence,
   signInWithPopup,
   signOut,
   type User,
@@ -22,9 +20,33 @@ export function subscribeToSyncUser(
   return onAuthStateChanged(auth, onChange, onError)
 }
 
-export async function signInToSync(): Promise<void> {
-  await setPersistence(auth, browserLocalPersistence)
-  await signInWithPopup(auth, googleProvider)
+export function signInToSync(): Promise<SyncUser> {
+  // getAuth already uses persistent browser storage; open the popup in the click handler.
+  return signInWithPopup(auth, googleProvider).then(result => result.user)
+}
+
+export function syncSignInErrorMessage(error: unknown): string {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? error.code
+    : undefined
+  switch (code) {
+    case 'auth/popup-blocked':
+      return 'Your browser blocked Google sign-in. Allow pop-ups for this site and try again. If using the installed app, open it in Safari or Chrome on this device.'
+    case 'auth/popup-closed-by-user':
+      return 'Google sign-in was not completed. Try again and finish signing in in the Google window.'
+    case 'auth/cancelled-popup-request':
+      return 'Google sign-in was interrupted. Please try again.'
+    case 'auth/unauthorized-domain':
+      return 'Google sign-in is not enabled for this domain. Add this hostname to Firebase Authentication authorized domains.'
+    case 'auth/operation-not-allowed':
+      return 'Google sign-in is not enabled in Firebase Authentication.'
+    case 'auth/web-storage-unsupported':
+      return 'Google sign-in needs browser storage. Allow cookies and site storage, then try again.'
+    case 'auth/network-request-failed':
+      return 'Google sign-in could not connect. Check your internet connection and try again.'
+    default:
+      return error instanceof Error ? error.message : String(error)
+  }
 }
 
 export async function signOutOfSync(): Promise<void> {

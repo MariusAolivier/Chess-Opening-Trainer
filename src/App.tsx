@@ -85,8 +85,7 @@ import {
   signInToSync,
   signOutOfSync,
   subscribeToSyncUser,
-  getLocalSyncOwner,
-  clearLocalSyncOwner,
+  syncSignInErrorMessage,
   type SyncUser,
 } from './lib/auth'
 import {
@@ -149,6 +148,7 @@ function App() {
   const [lichessUsername, setLichessUsername] = useState<string | null>(null)
   const [syncUser, setSyncUser] = useState<SyncUser | null>(null)
   const [syncAuthLoading, setSyncAuthLoading] = useState(true)
+  const [syncSigningIn, setSyncSigningIn] = useState(false)
   const scoreSnapshot = useScoresSnapshot()
   const reviewActivitySnapshot = useReviewActivitySnapshot()
   const currentTime = useCurrentTime()
@@ -265,16 +265,18 @@ function App() {
   }
 
   async function handleSyncSignIn() {
-    setSyncAuthLoading(true)
+    if (syncSigningIn) return
+    setSyncSigningIn(true)
     setSyncError(null)
     try {
-      await signInToSync()
+      const user = await signInToSync()
+      setSyncUser(user)
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
+      console.error('[auth] Google sign-in failed:', err)
       setSyncStatus('error')
-      setSyncError(message)
+      setSyncError(syncSignInErrorMessage(err))
     } finally {
-      setSyncAuthLoading(false)
+      setSyncSigningIn(false)
     }
   }
 
@@ -366,14 +368,6 @@ function App() {
 
   useEffect(() => subscribeToSyncUser(
     user => {
-      if (!user && getLocalSyncOwner()) {
-        clearStudies()
-        clearScores()
-        clearForkMainlines()
-        clearReviewActivity()
-        clearLocalSyncOwner()
-        setStoredStudies([])
-      }
       setSyncUser(user)
       setSyncAuthLoading(false)
     },
@@ -1131,6 +1125,9 @@ function App() {
           lichessUsername={lichessUsername}
           syncUser={syncUser}
           syncAuthLoading={syncAuthLoading}
+          syncSigningIn={syncSigningIn}
+          syncStatus={syncStatus}
+          syncError={syncError}
           onSyncWithLichess={handleSyncWithLichess}
           onSignInToSync={() => { void handleSyncSignIn() }}
           onSignOutOfSync={() => { void handleSyncSignOut() }}
@@ -1159,6 +1156,7 @@ function App() {
             lichessSyncing={lichessSyncing}
             syncUser={syncUser}
             syncAuthLoading={syncAuthLoading}
+            syncSigningIn={syncSigningIn}
             onTrainNow={startGlobalTrainingSession}
             onOpenRepertoire={() => setView('repertoire')}
             onSyncWithLichess={() => { void handleSyncWithLichess() }}

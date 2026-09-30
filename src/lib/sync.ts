@@ -27,6 +27,7 @@ import {
   loadScores,
   remapChapterIds,
   replaceAllScores,
+  scoreRecency,
 } from './scores'
 
 type FirestoreStudy = {
@@ -37,6 +38,7 @@ type FirestoreStudy = {
   chapters?: Chapter[]
   updatedAt?: string
   deletedAt?: Timestamp
+  mergedInto?: string
 }
 
 type FirestoreScore = {
@@ -218,13 +220,6 @@ function legacyScoreLineId(lineId: string): string {
   return lineId
 }
 
-function scoreRecency(record: ScoreRecord): number {
-  const reviewedAt = record.lastReviewedAt ? Date.parse(record.lastReviewedAt) : Number.NaN
-  if (!Number.isNaN(reviewedAt)) return reviewedAt
-  const dueAt = Date.parse(record.dueDate)
-  return Number.isNaN(dueAt) ? 0 : dueAt
-}
-
 function collapseRemoteScoreRecords(records: ScoreRecord[]): ScoreRecord[] {
   const grouped = new Map<string, ScoreRecord[]>()
   records.forEach(record => {
@@ -235,16 +230,26 @@ function collapseRemoteScoreRecords(records: ScoreRecord[]): ScoreRecord[] {
     grouped.set(key, group)
   })
 
-  return [...grouped.values()].map(group => {
+  return [...grouped.values()].flatMap(group => {
     const canonical = group.filter(record => record.lineId.startsWith('main::') || record.lineId.startsWith('var::'))
-    const candidates = canonical.length > 0 ? canonical : group
-    return candidates.reduce((newest, record) => scoreRecency(record) >= scoreRecency(newest) ? record : newest)
+    const newest = (candidates: ScoreRecord[]) => candidates.reduce((winner, record) => (
+      scoreRecency(record) >= scoreRecency(winner) ? record : winner
+    ))
+    if (canonical.length === 0) return [newest(group)]
+
+    const legacy = group.filter(record => !canonical.includes(record))
+    const lineIds = new Set(canonical.map(record => record.lineId))
+    return [...lineIds].map(lineId => {
+      const candidates = canonical.filter(record => record.lineId === lineId)
+      const winner = newest([...legacy, ...candidates])
+      return { ...winner, lineId, displaySan: candidates[0].displaySan }
+    })
   })
 }
 
 export async function uploadStudy(userId: string, study: StoredStudy): Promise<void> {
   const target = studyDoc(userId, study.id)
-  const written = await runTransaction(db, async transaction => {
+  await runTransaction(db, async transaction => {
     const existing = await transaction.get(target)
     if (existing.exists()) {
       const data = existing.data() as FirestoreStudy
@@ -257,22 +262,6 @@ export async function uploadStudy(userId: string, study: StoredStudy): Promise<v
     transaction.set(target, encodeStudy(study))
     return true
   })
-  if (!written) return
-
-  const normalizedName = normalizeStudyName(study.name)
-  const localUpdatedAt = study.updatedAt ? Date.parse(study.updatedAt) : 0
-  const snapshot = await getDocs(studiesCollection(userId))
-  const duplicates = snapshot.docs.filter(item => {
-    const data = item.data() as FirestoreStudy
-    const remoteUpdatedAt = data.updatedAt ? Date.parse(data.updatedAt) : 0
-    return (
-      item.id !== study.id &&
-      typeof data.name === 'string' &&
-      normalizeStudyName(data.name) === normalizedName &&
-      remoteUpdatedAt <= localUpdatedAt
-    )
-  })
-  await Promise.all(duplicates.map(item => setDoc(item.ref, { deletedAt: serverTimestamp() })))
 }
 
 export async function deleteStudyRemote(userId: string, studyId: string, studyName?: string): Promise<void> {
@@ -435,18 +424,30 @@ export async function fetchAndMerge(
 
   if (!shouldApply()) return false
   let changed = false
+  let chapterRemap = new Map<string, string>()
+  const studyRedirects: Array<{ study: StoredStudy; targetId: string }> = []
 
   {
     const localById = new Map(loadStudies().map(study => [study.id, study]))
+    const studiesById = new Map(localById)
     const reconciledStudies = new Map<string, StoredStudy>()
     const studiesToUpload: StoredStudy[] = []
+    const existingRedirects = new Map<string, string>()
+    const studyIdRemap = new Map<string, string>()
 
     studiesSnapshot.docs.forEach(snapshot => {
       const data = snapshot.data() as FirestoreStudy
       const local = localById.get(snapshot.id)
       localById.delete(snapshot.id)
+      const remote = decodeStudy(data)
+      if (remote) studiesById.set(remote.id, remote)
       const deletedAt = data.deletedAt?.toMillis()
       if (deletedAt !== undefined) {
+        if (typeof data.mergedInto === 'string') {
+          existingRedirects.set(snapshot.id, data.mergedInto)
+          studyIdRemap.set(snapshot.id, data.mergedInto)
+          return
+        }
         const localUpdatedAt = local?.updatedAt ? Date.parse(local.updatedAt) : 0
         if (local && localUpdatedAt > deletedAt) {
           reconciledStudies.set(local.id, local)
@@ -455,7 +456,6 @@ export async function fetchAndMerge(
         return
       }
 
-      const remote = decodeStudy(data)
       if (!remote) return
       const localUpdatedAt = local?.updatedAt ? Date.parse(local.updatedAt) : 0
       const remoteUpdatedAt = remote.updatedAt ? Date.parse(remote.updatedAt) : 0
@@ -476,9 +476,8 @@ export async function fetchAndMerge(
     if (!shouldApply()) return false
 
     const remoteStudies = [...reconciledStudies.values()]
-    const studiesById = new Map(remoteStudies.map(study => [study.id, study]))
+    remoteStudies.forEach(study => studiesById.set(study.id, study))
     const byName = new Map<string, StoredStudy>()
-    const studyIdRemap = new Map<string, string>()
 
     remoteStudies.forEach(study => {
       const key = normalizeStudyName(study.name)
@@ -497,25 +496,51 @@ export async function fetchAndMerge(
     merged.forEach(study => studiesById.set(study.id, study))
     localStorage.setItem('chess-opening-trainer:studies', JSON.stringify(merged))
 
-    const duplicateIds = [...studyIdRemap.keys()]
-    await Promise.all(duplicateIds.map(id => setDoc(
-      studyDoc(userId, id),
-      { deletedAt: serverTimestamp() },
-    )))
-    if (!shouldApply()) return false
+    studiesById.forEach(study => {
+      const target = byName.get(normalizeStudyName(study.name))
+      if (target && study.id !== target.id) studyIdRemap.set(study.id, target.id)
+    })
+    studyIdRemap.forEach((targetId, sourceId) => {
+      const visited = new Set([sourceId])
+      while (true) {
+        const nextTargetId = studyIdRemap.get(targetId)
+        if (nextTargetId === undefined) break
+        if (visited.has(targetId)) throw new Error('Cloud sync contains a circular study redirect.')
+        visited.add(targetId)
+        targetId = nextTargetId
+      }
+      studyIdRemap.set(sourceId, targetId)
+      const study = studiesById.get(sourceId)
+      if (study && existingRedirects.get(sourceId) !== targetId) {
+        studyRedirects.push({ study, targetId })
+      }
+    })
 
-    const chapterRemap = buildChapterIdRemap(studiesById, studyIdRemap)
-    if (chapterRemap.size > 0) remapChapterIds(chapterRemap)
+    chapterRemap = buildChapterIdRemap(studiesById, studyIdRemap)
     changed = !studiesSnapshot.empty || studiesToUpload.length > 0
   }
 
   await reconcileScoreSnapshot(userId, scoresSnapshot, shouldApply)
   if (!shouldApply()) return false
+  if (remapChapterIds(chapterRemap)) {
+    replaceAllScores(collapseRemoteScoreRecords(loadScores()))
+    await uploadScores(userId)
+  }
+  if (!shouldApply()) return false
   changed = changed || !scoresSnapshot.empty
 
   await reconcileForkMainlineSnapshot(userId, forkSnapshot, shouldApply)
   if (!shouldApply()) return false
+  if (remapChapterIds(chapterRemap)) await uploadForkMainlines(userId, false)
+  if (!shouldApply()) return false
   changed = changed || !forkSnapshot.empty
+
+  // Keep duplicate study metadata so later devices can migrate their original chapter IDs.
+  await Promise.all(studyRedirects.map(({ study, targetId }) => setDoc(
+    studyDoc(userId, study.id),
+    { ...encodeStudy(study), mergedInto: targetId, deletedAt: serverTimestamp() },
+  )))
+  if (!shouldApply()) return false
 
   await reconcileReviewActivitySnapshot(userId, activitySnapshot, shouldApply)
   if (!shouldApply()) return false
