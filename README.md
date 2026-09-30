@@ -34,3 +34,18 @@ Independently imported copies of the same study are merged, retaining redirect
 metadata so progress attached to each device's original chapter IDs can migrate.
 An expired or missing Google session does not clear local progress; only an
 explicit sign-out or a switch to another account clears the account's local cache.
+
+Sync uploads changed records rather than rewriting the entire repertoire.
+Unchanged fork recommendations keep their original timestamps, repeated review
+uploads do not increment activity twice, and live study updates reuse received
+snapshots instead of querying all collections again. Initial loads and listener
+attachments still consume reads; new or changed records consume writes.
+
+Firestore's free daily allowance includes 50,000 document reads and 20,000
+document writes. If Firebase reports quota exhaustion, the app stops its
+listeners and further cloud requests for that account on the device for the
+remainder of the Pacific quota day. The pause persists across reloads. Training
+and local progress remain available; do not clear site storage or sign out.
+Reload after the quota resets around midnight Pacific to resume reconciliation.
+Code changes cannot restore already-consumed quota, and billing is not required
+or automatically enabled.

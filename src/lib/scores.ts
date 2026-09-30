@@ -150,6 +150,13 @@ export function getLocalDeviceReviewCount(day: string): number {
   return deviceRecord?.count ?? 0
 }
 
+export function restoreLocalDeviceReviewCount(day: string, count: number): void {
+  const records = loadDeviceReviewActivity()
+  if (records.some(record => record.day === day)) return
+  records.push({ day, count })
+  saveDeviceReviewActivity(records)
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', event => {
     if (event.key === KEY) {
@@ -654,10 +661,14 @@ export function updateForkMainlines(
   newForkMap: Map<string, string>,  // forkFen → mainline SAN
 ): void {
   const mainlines = loadForkMainlines()
+  const previous = new Map(mainlines.filter(record => record.chapterId === chapterId).map(record => [record.forkFen, record]))
   const others = mainlines.filter(m => m.chapterId !== chapterId)
   const updatedAt = new Date().toISOString()
   newForkMap.forEach((mainlineSan, forkFen) => {
-    others.push({ chapterId, forkFen, mainlineSan, updatedAt })
+    const existing = previous.get(forkFen)
+    others.push(existing?.mainlineSan === mainlineSan
+      ? existing
+      : { chapterId, forkFen, mainlineSan, updatedAt })
   })
   saveForkMainlines(others)
 }

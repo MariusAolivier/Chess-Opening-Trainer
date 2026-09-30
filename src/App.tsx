@@ -54,6 +54,7 @@ import {
   uploadReviewActivity,
   incrementRemoteReviewActivity,
 } from './lib/sync'
+import { assertSyncAvailable } from './lib/syncQuota'
 import {
   HOME_FENS,
   STARTING_FEN,
@@ -184,6 +185,7 @@ function App() {
           updatedAt: new Date().toISOString(),
         }),
       ])
+      assertSyncAvailable(syncUser.uid)
       setSyncStatus('ok')
       setSyncError(null)
     } catch (err: unknown) {
@@ -759,6 +761,7 @@ function App() {
             uploadForkMainlines(syncUser.uid, false),
           ])
             .then(() => {
+              assertSyncAvailable(syncUser.uid)
               setSyncStatus('ok')
               setSyncError(null)
             })
@@ -816,10 +819,12 @@ function App() {
     }
 
     if (parsedStudies.length === 0) {
+      if (syncUser) assertSyncAvailable(syncUser.uid)
       return
     }
 
     if (studiesToSync.length === 0) {
+      if (syncUser) assertSyncAvailable(syncUser.uid)
       return
     }
 
@@ -835,6 +840,7 @@ function App() {
         uploadScores(syncUser.uid, false),
         uploadForkMainlines(syncUser.uid, false),
       ])
+      assertSyncAvailable(syncUser.uid)
     }
   }, [importSingleStudy, syncUser])
 
@@ -862,6 +868,7 @@ function App() {
           uploadForkMainlines(syncUser.uid, false),
         ])
           .then(() => {
+            assertSyncAvailable(syncUser.uid)
             setSyncStatus('ok')
             setSyncError(null)
           })
@@ -900,6 +907,7 @@ function App() {
           uploadForkMainlines(syncUser.uid, false),
         ])
           .then(() => {
+            assertSyncAvailable(syncUser.uid)
             setSyncStatus('ok')
             setSyncError(null)
           })
@@ -1080,6 +1088,7 @@ function App() {
           uploadReviewActivity(syncUser.uid, true),
         ])
           .then(() => {
+            assertSyncAvailable(syncUser.uid)
             setSyncStatus('ok')
             setSyncError(null)
           })
