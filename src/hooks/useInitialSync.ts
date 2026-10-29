@@ -9,7 +9,6 @@ import {
 } from '../lib/sync'
 import { clearStudies, loadStudies, type StoredStudy } from '../lib/storage'
 import {
-  capExistingScoreIntervals,
   clearForkMainlines,
   clearReviewActivity,
   clearScores,
@@ -33,7 +32,6 @@ export function useInitialSync({
   migrateLegacyChapterIdsForStudies,
 }: UseInitialSyncParams): void {
   useEffect(() => {
-    capExistingScoreIntervals()
     if (!userId) {
       setSyncStatus('idle')
       setSyncError(null)

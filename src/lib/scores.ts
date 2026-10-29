@@ -17,7 +17,7 @@ export interface ScoreRecord {
   chapterId: string
   lineId: string
   displaySan: string
-  /** SM-2 ease factor, starts at 2.5 */
+  /** SM-2 ease factor, starts at the intensity's ease ceiling */
   ease: number
   /** Current inter-review interval in days */
   interval: number
@@ -217,18 +217,62 @@ export function initScore(chapterId: string, lineId: string, displaySan: string)
   save(records)
 }
 
-const MAX_INTERVAL_DAYS = 30
+export type ReviewIntensity = 1 | 2 | 3 | 4 | 5
 
 /**
- * One-time migration: clamp any existing score whose interval exceeds 14 days.
- * Also adjusts the dueDate so it is no more than 14 days from lastReviewedAt
- * (or from now if lastReviewedAt is missing).
+ * Review rating for one line:
+ *   5 = no wrong moves
+ *   4 = one wrong move, answer not revealed
+ *   3 = several wrong moves, answer not revealed
+ *   2 = answer revealed once
+ *   0 = answer revealed more than once
+ * 3 and above count as a pass; 2 and 0 count as a fail.
  */
-export function capExistingScoreIntervals(): void {
-  const records = load().map(record => ({ ...record }))
-  const capped = applyIntervalCap(records)
-  const changed = capped.some((r, i) => r !== records[i])
-  if (changed) save(capped)
+export type ReviewQuality = 0 | 2 | 3 | 4 | 5
+
+export function reviewQuality(wrongMoves: number, reveals: number): ReviewQuality {
+  if (reveals >= 2) return 0
+  if (reveals === 1) return 2
+  if (wrongMoves === 0) return 5
+  if (wrongMoves === 1) return 4
+  return 3
+}
+
+/** Ease change per quality, before the intensity's ease change scale. */
+const EASE_CHANGE: Record<ReviewQuality, number> = {
+  5: 0.15,
+  4: 0,
+  3: -0.07,
+  2: -0.16,
+  0: -0.3,
+}
+
+const MIN_EASE = 1.3
+
+export interface SchedulingParams {
+  /** Shortest interval in days; first passes and fails land here */
+  minDays: number
+  /** Longest interval in days */
+  maxDays: number
+  /** Highest ease a line can reach; new lines start here */
+  easeCeiling: number
+  /** Multiplier applied to EASE_CHANGE */
+  easeChangeScale: number
+}
+
+// Intensity 1 (calm) and 5 (intense); settings in between are interpolated.
+const CALM_PARAMS: SchedulingParams = { minDays: 60, maxDays: 150, easeCeiling: 2.5, easeChangeScale: 0.5 }
+const INTENSE_PARAMS: SchedulingParams = { minDays: 7, maxDays: 30, easeCeiling: 2.0, easeChangeScale: 1 }
+
+export function schedulingParams(intensity: ReviewIntensity): SchedulingParams {
+  const t = (intensity - 1) / 4
+  const lerp = (calm: number, intense: number) => calm + (intense - calm) * t
+  return {
+    minDays: Math.round(lerp(CALM_PARAMS.minDays, INTENSE_PARAMS.minDays)),
+    maxDays: Math.round(lerp(CALM_PARAMS.maxDays, INTENSE_PARAMS.maxDays)),
+    easeCeiling: lerp(CALM_PARAMS.easeCeiling, INTENSE_PARAMS.easeCeiling),
+    easeChangeScale: lerp(CALM_PARAMS.easeChangeScale, INTENSE_PARAMS.easeChangeScale),
+  }
 }
 
 /** Return the score for a specific line, or undefined if never reviewed. */
@@ -236,17 +280,13 @@ export function getScore(chapterId: string, lineId: string): ScoreRecord | undef
   return load().find(r => r.chapterId === chapterId && r.lineId === lineId)
 }
 
-/**
- * Upsert a score record after a review.
- *
- * quality: 0–5  (SM-2 rating — 0/1/2 = forgot, 3 = hard, 4 = good, 5 = easy)
- */
+/** Upsert a score record after a review. */
 export function recordReview(
   chapterId: string,
   lineId: string,
   displaySan: string,
-  quality: 0 | 1 | 2 | 3 | 4 | 5,
-  intensity: 1 | 2 | 3 | 4 | 5 = 3
+  quality: ReviewQuality,
+  intensity: ReviewIntensity = 3
 ): ScoreRecord {
   const reviewedAt = new Date().toISOString()
   const records = load().map(record => ({ ...record }))
@@ -255,23 +295,19 @@ export function recordReview(
   const existing = idx >= 0 ? records[idx] : undefined
   // Keep the stored displaySan if the record already exists (seeded by initScore)
   const resolvedDisplaySan = existing?.displaySan ?? displaySan
-  const ease = clampEase(
-    (existing?.ease ?? 2.5) + 0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)
-  )
+  const params = schedulingParams(intensity)
+  const hasPassedBefore = Boolean(existing && existing.lastReviewedAt && existing.interval > 0)
+  const previousEase = hasPassedBefore ? existing!.ease : params.easeCeiling
+  const ease = clampEase(previousEase + EASE_CHANGE[quality] * params.easeChangeScale, params.easeCeiling)
 
   let interval: number
-  if (quality < 3) {
-    interval = 1
-  } else if (!existing || existing.interval === 0) {
-    interval = 1
-  } else if (existing.interval === 1) {
-    interval = 6
+  if (quality < 3 || !hasPassedBefore) {
+    interval = params.minDays
   } else {
-    const baseInterval = Math.round(existing.interval * ease)
-    interval = Math.max(1, Math.round(baseInterval * intensityIntervalScale(intensity)))
+    interval = Math.round(existing!.interval * ease)
   }
 
-  interval = Math.min(interval, MAX_INTERVAL_DAYS)
+  interval = Math.min(Math.max(interval, params.minDays), params.maxDays)
   const dueDate = new Date(Date.now() + interval * 86_400_000).toISOString()
   const record: ScoreRecord = {
     chapterId,
@@ -291,22 +327,6 @@ export function recordReview(
   save(records)
   recordReviewActivity()
   return record
-}
-
-function intensityIntervalScale(intensity: 1 | 2 | 3 | 4 | 5): number {
-  // Higher intensity means the same lines come back sooner.
-  switch (intensity) {
-    case 1:
-      return 1.35
-    case 2:
-      return 1.15
-    case 3:
-      return 1
-    case 4:
-      return 0.85
-    case 5:
-      return 0.7
-  }
 }
 
 export function loadReviewActivity(): ReviewActivityRecord[] {
@@ -538,8 +558,8 @@ export function syncChapterLines(chapterId: string, validLineIds: Set<string>): 
   return removed
 }
 
-function clampEase(e: number): number {
-  return Math.max(1.3, e)
+function clampEase(e: number, ceiling: number): number {
+  return Math.min(Math.max(MIN_EASE, e), ceiling)
 }
 
 /** Stable key for a branch — useful as React key or Map key. */
@@ -547,7 +567,6 @@ export { makeId as scoreBranchKey }
 
 /** Write a full set of score records (used by sync on remote update). */
 export function importAllScores(records: ScoreRecord[]): void {
-  const incoming = applyIntervalCap(records)
   const existing = load()
 
   // Merge rather than replace: keep any local record not present in the incoming
@@ -559,7 +578,7 @@ export function importAllScores(records: ScoreRecord[]): void {
   for (const r of existing) {
     byId.set(makeId(r.chapterId, r.lineId), r)
   }
-  for (const r of incoming) {
+  for (const r of records) {
     const key = makeId(r.chapterId, r.lineId)
     const local = byId.get(key)
     if (!local) {
@@ -575,7 +594,7 @@ export function importAllScores(records: ScoreRecord[]): void {
 
 /** Replace local scores with an authoritative snapshot, including an empty one. */
 export function replaceAllScores(records: ScoreRecord[]): void {
-  save(applyIntervalCap(records))
+  save(records)
 }
 
 export function clearScores(): void {
@@ -585,14 +604,6 @@ export function clearScores(): void {
 export function clearReviewActivity(): void {
   saveReviewActivity([])
   saveDeviceReviewActivity([])
-}
-
-function applyIntervalCap(records: ScoreRecord[]): ScoreRecord[] {
-  return records.map(r => {
-    if (r.interval <= MAX_INTERVAL_DAYS) return r
-    const base = r.lastReviewedAt ? Date.parse(r.lastReviewedAt) : Date.now()
-    return { ...r, interval: MAX_INTERVAL_DAYS, dueDate: new Date(base + MAX_INTERVAL_DAYS * 86_400_000).toISOString() }
-  })
 }
 
 /** Read the raw fork mainlines array (used by sync to upload). */

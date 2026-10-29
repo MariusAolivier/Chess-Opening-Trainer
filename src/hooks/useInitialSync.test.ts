@@ -24,7 +24,6 @@ vi.mock('../lib/auth', () => ({
 }))
 vi.mock('../lib/storage', () => ({ loadStudies: () => [], clearStudies: vi.fn() }))
 vi.mock('../lib/scores', () => ({
-  capExistingScoreIntervals: vi.fn(),
   clearForkMainlines: vi.fn(),
   clearReviewActivity: vi.fn(),
   clearScores: vi.fn(),

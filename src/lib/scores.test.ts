@@ -64,22 +64,80 @@ describe('score persistence', () => {
     expect(scores.getReviewActivitySnapshot()).not.toBe(activitySnapshot)
   })
 
-  it('stores the capped interval rather than only capping the due date', async () => {
+  it('maps wrong moves and reveals to a review quality', async () => {
+    const { reviewQuality } = await import('./scores')
+
+    expect(reviewQuality(0, 0)).toBe(5)
+    expect(reviewQuality(1, 0)).toBe(4)
+    expect(reviewQuality(3, 0)).toBe(3)
+    expect(reviewQuality(1, 1)).toBe(2)
+    expect(reviewQuality(2, 2)).toBe(0)
+  })
+
+  it('interpolates scheduling bands between calm and intense', async () => {
+    const { schedulingParams } = await import('./scores')
+
+    expect(schedulingParams(1)).toEqual({ minDays: 60, maxDays: 150, easeCeiling: 2.5, easeChangeScale: 0.5 })
+    expect(schedulingParams(3)).toEqual({ minDays: 34, maxDays: 90, easeCeiling: 2.25, easeChangeScale: 0.75 })
+    expect(schedulingParams(5)).toEqual({ minDays: 7, maxDays: 30, easeCeiling: 2, easeChangeScale: 1 })
+  })
+
+  it('grows intervals within the intense band', async () => {
+    const scores = await import('./scores')
+    scores.initScore('chapter', 'line', 'Main line')
+
+    const intervals = [1, 2, 3, 4].map(() => scores.recordReview('chapter', 'line', 'Main line', 5, 5).interval)
+
+    expect(intervals).toEqual([7, 14, 28, 30])
+  })
+
+  it('schedules calm lines two to five months out', async () => {
+    const scores = await import('./scores')
+
+    const first = scores.recordReview('chapter', 'line', 'Main line', 5, 1)
+    const second = scores.recordReview('chapter', 'line', 'Main line', 5, 1)
+
+    expect(first.interval).toBe(60)
+    expect(first.dueDate).toBe('2026-03-02T12:00:00.000Z')
+    expect(second.interval).toBe(150)
+  })
+
+  it('sends failed lines back to the band minimum, never the next day', async () => {
+    const scores = await import('./scores')
+    scores.replaceAllScores([{
+      chapterId: 'chapter',
+      lineId: 'line',
+      displaySan: 'Main line',
+      ease: 2,
+      interval: 30,
+      dueDate: '2026-01-01T12:00:00.000Z',
+      lastReviewedAt: '2025-12-02T12:00:00.000Z',
+    }])
+
+    const failed = scores.recordReview('chapter', 'line', 'Main line', 0, 5)
+
+    expect(failed.interval).toBe(7)
+    expect(failed.ease).toBeCloseTo(1.7)
+  })
+
+  it('keeps intervals longer than 30 days and clamps ease to the ceiling', async () => {
     const scores = await import('./scores')
     scores.replaceAllScores([{
       chapterId: 'chapter',
       lineId: 'line',
       displaySan: 'Main line',
       ease: 2.5,
-      interval: 30,
+      interval: 150,
       dueDate: '2026-01-01T12:00:00.000Z',
-      lastReviewedAt: '2026-01-01T12:00:00.000Z',
+      lastReviewedAt: '2025-08-04T12:00:00.000Z',
     }])
 
-    const reviewed = scores.recordReview('chapter', 'line', 'Main line', 5)
+    expect(scores.loadScores()[0].interval).toBe(150)
 
+    const reviewed = scores.recordReview('chapter', 'line', 'Main line', 4, 5)
+
+    expect(reviewed.ease).toBe(2)
     expect(reviewed.interval).toBe(30)
-    expect(reviewed.dueDate).toBe('2026-01-31T12:00:00.000Z')
   })
 
   it('migrates legacy leaf-FEN line ids before pruning', async () => {

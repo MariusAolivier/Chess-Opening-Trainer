@@ -29,6 +29,7 @@ import {
 import {
   loadScores,
   recordReview,
+  reviewQuality,
   initScore,
   clearScores,
   clearForkMainlines,
@@ -41,6 +42,7 @@ import {
   findConflicts,
   type ConflictInfo,
   type ScoreRecord,
+  type ReviewQuality,
   getReviewStreak,
   calculateReviewStreak,
   reviewDayKey,
@@ -102,7 +104,10 @@ function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const wrongCountRef = useRef(0)
+  const revealCountRef = useRef(0)
+  // First-round counts, kept while a failed variation is replayed
   const retryWrongCountRef = useRef(0)
+  const retryRevealCountRef = useRef(0)
   const trainingQueueRef = useRef<TrainingLine[]>([])
   const globalQueueRef = useRef<GlobalTrainingEntry[]>([])
   const isGlobalSessionRef = useRef(false)
@@ -125,7 +130,7 @@ function App() {
   const [trainingSessionKey, setTrainingSessionKey] = useState(0)
   const [isRetryingVariation, setIsRetryingVariation] = useState(false)
   const [boardResetKey, setBoardResetKey] = useState(0)
-  const [parentLineState, setParentLineState] = useState<{ line: TrainingLine; moveIndex: number; wrongCount: number; sidelineStartFen: string } | null>(null)
+  const [parentLineState, setParentLineState] = useState<{ line: TrainingLine; moveIndex: number; wrongCount: number; revealCount: number; sidelineStartFen: string } | null>(null)
   const [isSideline, setIsSideline] = useState(false)
 
   const [error, setError] = useState<string | null>(null)
@@ -165,7 +170,9 @@ function App() {
     setParentLineState(null)
     setIsSideline(false)
     wrongCountRef.current = 0
+    revealCountRef.current = 0
     retryWrongCountRef.current = 0
+    retryRevealCountRef.current = 0
     trainingQueueRef.current = []
     setTrainingQueue([])
   }
@@ -209,13 +216,16 @@ function App() {
     return remapChapterIds(remap)
   }, [])
 
-  function recordLineReview() {
+  function clearRetryCounts() {
+    retryWrongCountRef.current = 0
+    retryRevealCountRef.current = 0
+  }
+
+  function recordLineQuality(quality: ReviewQuality) {
     if (!selectedStudyId || !selectedChapter || !activeLine) return
     const chapterIndex = chapters.indexOf(selectedChapter)
     if (chapterIndex < 0) return
 
-    const wrongs = Math.max(wrongCountRef.current, retryWrongCountRef.current)
-    const quality: 0 | 1 | 2 | 3 | 4 | 5 = wrongs === 0 ? 5 : wrongs === 1 ? 2 : wrongs === 2 ? 1 : 0
     const record = recordReview(
       chapterId(selectedStudyId, chapters, chapterIndex),
       activeLine.lineId,
@@ -223,8 +233,17 @@ function App() {
       quality,
       spacedRepetitionIntensity,
     )
-    retryWrongCountRef.current = 0
     void persistReviewData(record)
+  }
+
+  function recordLineReview() {
+    // The worse of the first round and the replay counts
+    const quality = Math.min(
+      reviewQuality(wrongCountRef.current, revealCountRef.current),
+      reviewQuality(retryWrongCountRef.current, retryRevealCountRef.current),
+    ) as ReviewQuality
+    recordLineQuality(quality)
+    clearRetryCounts()
   }
   const recordLineReviewEvent = useEffectEvent(recordLineReview)
 
@@ -360,6 +379,8 @@ function App() {
     setParentLineState(null)
     setIsSideline(false)
     wrongCountRef.current = 0
+    revealCountRef.current = 0
+    clearRetryCounts()
     const queueLines = rest.map(e => e.line).slice(0, MAX_QUEUE_SIZE)
     trainingQueueRef.current = queueLines
     setTrainingQueue(queueLines)
@@ -579,6 +600,8 @@ function App() {
     trainingQueueRef.current = rest
     setTrainingQueue(rest.slice(0, MAX_QUEUE_SIZE))
     wrongCountRef.current = 0
+    revealCountRef.current = 0
+    clearRetryCounts()
     setParentLineState(null)
     setIsSideline(false)
     setMoveIndex(findQuizStartMoveIndex(selectedChapter, first.line, userColor, undefined, first.label))
@@ -664,11 +687,13 @@ function App() {
             line: updatedParent,
             moveIndex,
             wrongCount: wrongCountRef.current,
+            revealCount: revealCountRef.current,
             sidelineStartFen: fen,
           })
           setActiveLine(nextSideline.sidelineLine)
           setIsSideline(true)
           wrongCountRef.current = 0
+          revealCountRef.current = 0
           setQuizWrong(null)
           setRevealedAnswer(false)
           setMoveIndex(-1)
@@ -682,11 +707,13 @@ function App() {
     if (nextIndex >= line.length) {
       if (repeatFailedVariationsEnabled && wrongCountRef.current > 0 && !isRetryingVariation) {
         retryWrongCountRef.current = wrongCountRef.current
+        retryRevealCountRef.current = revealCountRef.current
         const timeout = setTimeout(() => {
           setQuizWrong(null)
           setRevealedAnswer(false)
           setIsRetryingVariation(true)
           wrongCountRef.current = 0
+          revealCountRef.current = 0
           setMoveIndex(isSideline ? -1 : findQuizStartMoveIndex(selectedChapter, line, userColor, undefined, activeLine.label))
           setBoardResetKey(key => key + 1)
         }, VARIATION_COMPLETE_DELAY_MS)
@@ -704,6 +731,7 @@ function App() {
           setActiveLine(parentLineState.line)
           setMoveIndex(parentLineState.moveIndex)
           wrongCountRef.current = parentLineState.wrongCount
+          revealCountRef.current = parentLineState.revealCount
           setParentLineState(null)
           setIsSideline(false)
           setBoardResetKey(key => key + 1)
@@ -716,6 +744,7 @@ function App() {
         setRevealedAnswer(false)
         setIsRetryingVariation(false)
         wrongCountRef.current = 0
+        revealCountRef.current = 0
 
         advanceToNextTrainingLine()
       }, VARIATION_COMPLETE_DELAY_MS)
@@ -1023,7 +1052,7 @@ function App() {
 
   function revealAnswer() {
     setRevealedAnswer(true)
-    wrongCountRef.current = 99
+    revealCountRef.current += 1
   }
 
   function skipCurrentLine() {
@@ -1032,26 +1061,22 @@ function App() {
     const chapterIndex = chapters.indexOf(selectedChapter)
     if (chapterIndex < 0) return
 
-    // Record as failed
-    const record = recordReview(
-      chapterId(selectedStudyId, chapters, chapterIndex),
-      activeLine.lineId,
-      activeLine.scoreDisplaySan,
-      1,
-      spacedRepetitionIntensity
-    )
-    void persistReviewData(record)
+    // Skip is only offered during a replay: score the first round as played
+    recordLineQuality(reviewQuality(retryWrongCountRef.current, retryRevealCountRef.current))
+    clearRetryCounts()
 
     setQuizWrong(null)
     setRevealedAnswer(false)
     setIsRetryingVariation(false)
     wrongCountRef.current = 0
+    revealCountRef.current = 0
 
     // If skipping a sideline, return to parent
     if (parentLineState) {
       setActiveLine(parentLineState.line)
       setMoveIndex(parentLineState.moveIndex)
       wrongCountRef.current = parentLineState.wrongCount
+      revealCountRef.current = parentLineState.revealCount
       setParentLineState(null)
       setIsSideline(false)
       setBoardResetKey(key => key + 1)
