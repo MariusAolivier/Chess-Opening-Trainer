@@ -47,7 +47,8 @@ function isChapter(value: unknown): value is Chapter {
     typeof chapter.startFen === 'string' &&
     (chapter.startComment === undefined || typeof chapter.startComment === 'string') &&
     Array.isArray(chapter.moves) &&
-    chapter.moves.every(isMoveNode)
+    chapter.moves.every(isMoveNode) &&
+    (chapter.trainFromStart === undefined || typeof chapter.trainFromStart === 'boolean')
   )
 }
 

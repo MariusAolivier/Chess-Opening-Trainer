@@ -73,6 +73,8 @@ export interface Chapter {
   startFen: string
   startComment?: string
   moves: MoveNode[]  // children of the start position
+  /** Set when a "#start" comment moved startFen; the quiz then starts right at startFen */
+  trainFromStart?: boolean
 }
 
 export interface ParsedStudy {
@@ -180,6 +182,32 @@ function pruneSingleMoveBranches(nodes: MoveNode[]): MoveNode[] {
     const branchDepthInPlies = 1 + lineDepth(prunedChildren)
     return branchDepthInPlies <= 1 ? [] : [prunedNode]
   })
+}
+
+/** Comment marker on a mainline move: training starts from the position after it */
+const START_MARKER = /#start\b/i
+
+/**
+ * Lichess studies always start from the initial position, so a "#start" comment
+ * on a mainline move moves the chapter start to the position after that move.
+ * Earlier moves, and variations branching off before it, are dropped.
+ */
+export function applyStartMarker(chapter: Chapter): Chapter {
+  let nodes = chapter.moves
+  while (nodes.length > 0) {
+    const main = nodes[0]
+    if (main.comment && START_MARKER.test(main.comment)) {
+      return {
+        ...chapter,
+        startFen: main.fen,
+        startComment: main.comment.replace(START_MARKER, '').trim() || undefined,
+        moves: main.children,
+        trainFromStart: true,
+      }
+    }
+    nodes = main.children
+  }
+  return chapter
 }
 
 /**
@@ -325,12 +353,12 @@ export function parseStudyWithWarnings(pgn: string): { name: string | null; chap
       })
     }
 
-    return {
+    return applyStartMarker({
       title,
       startFen,
       startComment: game.gameComment?.comment,
       moves,
-    }
+    })
   })
 
   return { name, chapters, warnings }
@@ -358,12 +386,12 @@ export function parseStudiesWithWarnings(pgn: string): { studies: ParsedStudy[];
     const maxVariationNestingRef = { current: 0 }
 
     chess.load(startFen)
-    const chapter: Chapter = {
+    const chapter = applyStartMarker({
       title,
       startFen,
       startComment: game.gameComment?.comment,
       moves: pruneSingleMoveBranches(buildLine(startFen, game.moves as PgnMove[], chess, 0, maxVariationNestingRef)),
-    }
+    })
 
     if (maxVariationNestingRef.current > 3) {
       warnings.push({

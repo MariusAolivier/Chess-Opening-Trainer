@@ -53,8 +53,9 @@ export function findQuizStartMoveIndex(
   targetUserTurn = QUIZ_START_USER_TURN,
   label?: string,
 ): number {
-  // Theme chapters start training from the chapter's start FEN (move 1 to play).
-  if (isThemeChapter(chapter.title) || isThemeChapter(label)) {
+  // Theme chapters and "#start"-marked chapters start training from the
+  // chapter's start FEN (move 1 to play).
+  if (chapter.trainFromStart || isThemeChapter(chapter.title) || isThemeChapter(label)) {
     return -1
   }
 
